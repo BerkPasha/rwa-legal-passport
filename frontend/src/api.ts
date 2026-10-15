@@ -13,9 +13,7 @@ import type {
   ReviewStatus,
 } from './types'
 
-export const API_BASE = (import.meta as Record<string, unknown>).env
-  ? ((import.meta as { env: Record<string, string> }).env.VITE_API_URL ?? 'http://localhost:8000')
-  : 'http://localhost:8000'
+export const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 // ── Error handling ────────────────────────────────────────────────────────────
 

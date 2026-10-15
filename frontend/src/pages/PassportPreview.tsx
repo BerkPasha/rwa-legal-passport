@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { getLegalPassport, ApiError } from '../api'
-import type { LegalPassport, BlockchainNetwork } from '../types'
+import type { LegalPassport, BlockchainNetwork, ReviewerRole } from '../types'
 import { ClaimStatusBadge, ApprovalTypeBadge } from '../components/StatusBadge'
 import { DisclaimerBanner } from '../components/DisclaimerBanner'
 import { Spinner } from '../components/Spinner'
@@ -16,7 +16,14 @@ const FIELD_LABELS: Record<string, string> = {
   insolvency_provisions: 'Insolvency Provisions',
 }
 
+// The public passport exposes only the reviewer's role, never their identity.
+const REVIEWER_ROLE_LABELS: Record<ReviewerRole, string> = {
+  issuer_reviewer: 'Issuer Reviewer',
+  independent_legal_reviewer: 'Independent Legal Reviewer',
+}
+
 function PassportCard({ passport }: { passport: LegalPassport }) {
+  const { asset, extraction_metadata: meta, source_document: sourceDoc } = passport
   return (
     <div className="space-y-6" data-testid="passport-card">
       <DisclaimerBanner variant="legal" text={passport.disclaimer} />
@@ -27,18 +34,18 @@ function PassportCard({ passport }: { passport: LegalPassport }) {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="font-semibold text-slate-900">
-                Legal Passport — v{passport.passport_version}
+                Legal Passport — v{meta.passport_version}
               </h3>
               <p className="mt-1 text-sm text-slate-500">
-                Asset: <span className="font-mono font-medium text-slate-800">{passport.asset.stellar_asset_code}</span>
+                Asset: <span className="font-mono font-medium text-slate-800">{asset.asset_code}</span>
                 {' · '}
-                {passport.asset.issuer_organization_name}
+                {asset.issuer_organization}
               </p>
             </div>
             <div className="text-right">
               <p className="text-xs text-slate-400">Effective Date</p>
               <p className="font-mono text-sm font-medium text-slate-800">
-                {new Date(passport.effective_date).toLocaleDateString('en-US', {
+                {new Date(meta.effective_date).toLocaleDateString('en-US', {
                   year: 'numeric', month: 'short', day: 'numeric',
                 })}
               </p>
@@ -49,22 +56,22 @@ function PassportCard({ passport }: { passport: LegalPassport }) {
           <div className="px-6 py-4">
             <p className="text-xs text-slate-400">Network</p>
             <p className="mt-1 text-sm font-medium text-slate-800">
-              {passport.asset.blockchain_network === 'stellar-mainnet' ? 'Stellar Mainnet' : 'Stellar Testnet'}
+              {asset.network === 'stellar-mainnet' ? 'Stellar Mainnet' : 'Stellar Testnet'}
             </p>
           </div>
           <div className="px-6 py-4">
             <p className="text-xs text-slate-400">Asset Type</p>
             <p className="mt-1 text-sm font-medium capitalize text-slate-800">
-              {passport.asset.asset_type.replace('_', ' ')}
+              {asset.asset_type.replace('_', ' ')}
             </p>
           </div>
           <div className="px-6 py-4">
             <p className="text-xs text-slate-400">Jurisdiction</p>
-            <p className="mt-1 font-mono text-sm font-medium text-slate-800">{passport.asset.jurisdiction}</p>
+            <p className="mt-1 font-mono text-sm font-medium text-slate-800">{asset.jurisdiction}</p>
           </div>
           <div className="px-6 py-4">
             <p className="text-xs text-slate-400">Passport Version</p>
-            <p className="mt-1 text-sm font-medium text-slate-800">v{passport.passport_version}</p>
+            <p className="mt-1 text-sm font-medium text-slate-800">v{meta.passport_version}</p>
           </div>
         </div>
       </div>
@@ -123,7 +130,9 @@ function PassportCard({ passport }: { passport: LegalPassport }) {
             {passport.approvals.map((ap, i) => (
               <li key={i} className="flex items-center justify-between px-6 py-4">
                 <div>
-                  <p className="text-sm font-medium text-slate-800">{ap.reviewer_id}</p>
+                  <p className="text-sm font-medium text-slate-800">
+                    {REVIEWER_ROLE_LABELS[ap.reviewer_role] ?? ap.reviewer_role}
+                  </p>
                   <p className="text-xs text-slate-400">
                     {new Date(ap.approved_at).toLocaleString()}
                   </p>
@@ -144,32 +153,30 @@ function PassportCard({ passport }: { passport: LegalPassport }) {
           <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <div>
               <dt className="text-xs text-slate-400">Extraction ID</dt>
-              <dd className="mt-1 font-mono text-xs text-slate-800">{passport.extraction.id}</dd>
+              <dd className="mt-1 font-mono text-xs text-slate-800">{meta.extraction_id}</dd>
             </div>
             <div>
               <dt className="text-xs text-slate-400">Model Used</dt>
-              <dd className="mt-1 font-mono text-xs text-slate-800">{passport.extraction.ai_model_used ?? '—'}</dd>
+              <dd className="mt-1 font-mono text-xs text-slate-800">{meta.ai_model || '—'}</dd>
             </div>
             <div>
               <dt className="text-xs text-slate-400">Extracted At</dt>
               <dd className="mt-1 text-xs text-slate-800">
-                {new Date(passport.extraction.extracted_at).toLocaleString()}
+                {new Date(meta.extraction_timestamp).toLocaleString()}
               </dd>
             </div>
-            {passport.extraction.document && (
-              <>
-                <div>
-                  <dt className="text-xs text-slate-400">Source Document</dt>
-                  <dd className="mt-1 text-xs text-slate-800">{passport.extraction.document.filename}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-slate-400">Document Type</dt>
-                  <dd className="mt-1 text-xs capitalize text-slate-800">
-                    {passport.extraction.document.document_type.replace('_', ' ')}
-                  </dd>
-                </div>
-              </>
-            )}
+            <div>
+              <dt className="text-xs text-slate-400">Source Document</dt>
+              <dd className="mt-1 text-xs text-slate-800">
+                {sourceDoc.title} (v{sourceDoc.version_number})
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-400">Document Type</dt>
+              <dd className="mt-1 text-xs capitalize text-slate-800">
+                {sourceDoc.document_type.replace('_', ' ')}
+              </dd>
+            </div>
           </dl>
         </div>
       </div>

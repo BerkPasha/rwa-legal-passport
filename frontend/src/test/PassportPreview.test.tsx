@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { http, HttpResponse } from 'msw'
@@ -103,7 +103,26 @@ describe('PassportPreview', () => {
     await userEvent.type(screen.getByPlaceholderText(/X-API-Key/i), 'test-inst-key-alpha')
     await userEvent.click(screen.getByRole('button', { name: /fetch legal passport/i }))
 
-    await screen.findByTestId('passport-card')
-    expect(screen.getByText('alice-chen-01')).toBeInTheDocument()
+    const card = await screen.findByTestId('passport-card')
+    // The public passport shows the reviewer's role, never their identity.
+    expect(within(card).getByText('Issuer Reviewer')).toBeInTheDocument()
+    expect(within(card).getByText('Issuer Attestation')).toBeInTheDocument()
+  })
+
+  it('shows asset, network and extraction metadata from the backend response', async () => {
+    renderWithProviders()
+    await userEvent.type(screen.getByPlaceholderText('MRPROP'), 'MRPROP')
+    await userEvent.type(screen.getByPlaceholderText('G…'), 'GABC1234')
+    await userEvent.type(screen.getByPlaceholderText(/X-API-Key/i), 'test-inst-key-alpha')
+    await userEvent.click(screen.getByRole('button', { name: /fetch legal passport/i }))
+
+    const card = await screen.findByTestId('passport-card')
+    expect(within(card).getByText('MRPROP')).toBeInTheDocument()
+    expect(within(card).getByText(/Meridian Property Holdings LLC/)).toBeInTheDocument()
+    expect(within(card).getByText('Stellar Mainnet')).toBeInTheDocument()
+    expect(within(card).getByText('ext-001')).toBeInTheDocument()
+    expect(within(card).getByText('claude-haiku-4-5-20251001')).toBeInTheDocument()
+    expect(within(card).getByText('Q4 2024 Prospectus (v1)')).toBeInTheDocument()
+    expect(within(card).queryByText(/Invalid Date/)).not.toBeInTheDocument()
   })
 })

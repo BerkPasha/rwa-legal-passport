@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw'
+import type { LegalPassport, ReviewApproval } from '../../types'
 
 const BASE = 'http://localhost:8000'
 
@@ -61,37 +62,63 @@ export const MOCK_EXTRACTION = {
   ],
 }
 
-export const MOCK_PASSPORT = {
-  asset: MOCK_ASSET,
+// Same shape as the backend's LegalPassportResponse (GET /passport/...).
+export const MOCK_PASSPORT: LegalPassport = {
+  asset: {
+    asset_id: 'asset-001',
+    asset_code: 'MRPROP',
+    issuer_key: 'GABC1234567890',
+    network: 'stellar-mainnet',
+    issuer_organization: 'Meridian Property Holdings LLC',
+    asset_type: 'real_estate',
+    jurisdiction: 'US-NY',
+  },
   legal_rights: [
     {
       field_name: 'ownership_nature',
       value: 'Direct fractional ownership of underlying real estate',
       is_unknown: false,
       verified: true,
+      source_page: 1,
       supporting_passage: 'Each token represents a fractional ownership interest in the property.',
     },
   ],
   approvals: [
     {
-      reviewer_id: 'alice-chen-01',
       approval_type: 'issuer_attestation',
+      reviewer_role: 'issuer_reviewer',
       approved_at: '2024-01-03T00:00:00Z',
+      notes: null,
     },
   ],
-  extraction: {
-    id: 'ext-001',
-    ai_model_used: 'claude-3-5-sonnet',
-    extracted_at: '2024-01-02T00:00:00Z',
-    document: {
-      id: 'doc-001',
-      filename: 'prospectus_v1.pdf',
-      document_type: 'prospectus',
-    },
+  source_document: {
+    document_id: 'doc-001',
+    title: 'Q4 2024 Prospectus',
+    document_type: 'prospectus',
+    version_number: 1,
   },
-  passport_version: 1,
-  effective_date: '2024-01-03T00:00:00Z',
+  extraction_metadata: {
+    extraction_id: 'ext-001',
+    ai_model: 'claude-haiku-4-5-20251001',
+    extraction_timestamp: '2024-01-02T00:00:00Z',
+    passport_version: 1,
+    effective_date: '2024-01-03T00:00:00Z',
+  },
   disclaimer: 'INSTITUTIONAL USE ONLY - NOT LEGAL ADVICE',
+  retrieved_at: '2024-01-04T00:00:00Z',
+}
+
+// Same shape as the backend's approval record (POST/GET /extractions/{id}/approvals).
+export const MOCK_APPROVAL: ReviewApproval = {
+  id: 'appr-001',
+  extraction_id: 'ext-001',
+  reviewer_id: 'alice-chen-01',
+  reviewer_role: 'issuer_reviewer',
+  approval_type: 'issuer_attestation',
+  disclaimer: 'INTERNAL REVIEW ONLY - NOT LEGAL ADVICE',
+  notes: null,
+  approved_at: '2024-01-03T00:00:00Z',
+  created_at: '2024-01-03T00:00:00Z',
 }
 
 export const handlers = [
@@ -145,7 +172,7 @@ export const handlers = [
   }),
 
   http.post(`${BASE}/extractions/:id/approvals`, () => {
-    return HttpResponse.json(MOCK_PASSPORT.approvals[0], { status: 201 })
+    return HttpResponse.json(MOCK_APPROVAL, { status: 201 })
   }),
 
   http.get(`${BASE}/extractions/:id/corrections`, () => {
@@ -153,7 +180,7 @@ export const handlers = [
   }),
 
   http.get(`${BASE}/extractions/:id/approvals`, () => {
-    return HttpResponse.json(MOCK_PASSPORT.approvals)
+    return HttpResponse.json([MOCK_APPROVAL])
   }),
 
   // Blockchain
