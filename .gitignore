@@ -1,0 +1,75 @@
+# =============================================================================
+#  RWA Legal Passport - files that must never be committed
+# =============================================================================
+
+# ---- Secrets & local configuration -------------------------------------------
+# Real settings and API keys live only in .env; the template stays committed.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+secrets/
+service-account*.json
+
+# ---- Local databases ---------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# ---- Uploaded legal documents (STORAGE_PATH) ---------------------------------
+storage/
+uploads/
+# Never commit legal documents by accident (test PDFs are generated in memory).
+# If a document really belongs in the repo, add it explicitly: git add -f <file>
+*.pdf
+*.doc
+*.docx
+
+# ---- Python ------------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# ---- Node / frontend ---------------------------------------------------------
+node_modules/
+dist-ssr/
+.vite/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- Logs --------------------------------------------------------------------
+*.log
+logs/
+
+# ---- OS / editor -------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~

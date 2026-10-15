@@ -1,0 +1,80 @@
+import { describe, it, expect } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
+import { AssetList } from '../pages/AssetList'
+
+function renderWithRouter() {
+  return render(
+    <MemoryRouter>
+      <AssetList />
+    </MemoryRouter>,
+  )
+}
+
+describe('AssetList', () => {
+  it('shows registered asset from API', async () => {
+    renderWithRouter()
+    expect(await screen.findByText('MRPROP')).toBeInTheDocument()
+    expect(screen.getByText('Meridian Property Holdings LLC')).toBeInTheDocument()
+  })
+
+  it('shows asset count in subtitle', async () => {
+    renderWithRouter()
+    await screen.findByText('MRPROP')
+    expect(screen.getByText(/1 tokenized asset registered/)).toBeInTheDocument()
+  })
+
+  it('shows View link for each asset', async () => {
+    renderWithRouter()
+    await screen.findByText('MRPROP')
+    expect(screen.getByRole('link', { name: /view/i })).toBeInTheDocument()
+  })
+
+  it('shows network column', async () => {
+    renderWithRouter()
+    await screen.findByText('MRPROP')
+    expect(screen.getByText('Testnet')).toBeInTheDocument()
+  })
+
+  it('shows jurisdiction column', async () => {
+    renderWithRouter()
+    await screen.findByText('MRPROP')
+    expect(screen.getByText('US-NY')).toBeInTheDocument()
+  })
+
+  it('toggles register form when button clicked', async () => {
+    renderWithRouter()
+    await screen.findByText('MRPROP')
+    const btn = screen.getByRole('button', { name: /register asset/i })
+    await userEvent.click(btn)
+    expect(screen.getByText('Register New Tokenized Asset')).toBeInTheDocument()
+  })
+
+  it('hides form when Cancel clicked', async () => {
+    renderWithRouter()
+    await screen.findByText('MRPROP')
+    const btn = screen.getByRole('button', { name: /register asset/i })
+    await userEvent.click(btn)
+    await userEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    expect(screen.queryByText('Register New Tokenized Asset')).not.toBeInTheDocument()
+  })
+
+  it('submits form with entered values', async () => {
+    renderWithRouter()
+    await screen.findByText('MRPROP')
+    await userEvent.click(screen.getByRole('button', { name: /register asset/i }))
+
+    await userEvent.type(screen.getByPlaceholderText('MRPROP'), 'NEWASSET')
+    await userEvent.type(screen.getByPlaceholderText('G…'), 'GTEST1234')
+    await userEvent.type(screen.getByPlaceholderText(/Meridian/i), 'Test Corp')
+    await userEvent.type(screen.getByPlaceholderText('US-NY'), 'US-CA')
+
+    const submitBtn = screen.getAllByRole('button', { name: /register asset/i })[1]
+    await userEvent.click(submitBtn)
+
+    await waitFor(() => {
+      expect(screen.queryByText('Register New Tokenized Asset')).not.toBeInTheDocument()
+    })
+  })
+})

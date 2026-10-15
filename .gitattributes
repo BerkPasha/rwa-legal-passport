@@ -1,0 +1,4 @@
+# Windows batch scripts must keep CRLF line endings: cmd.exe misreads labels
+# and goto targets in LF-only files, which would break start-rwa.bat.
+*.bat text eol=crlf
+*.cmd text eol=crlf
