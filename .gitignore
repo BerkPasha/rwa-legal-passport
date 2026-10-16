@@ -16,7 +16,10 @@
 id_rsa*
 id_ed25519*
 secrets/
+/secrets.json
 service-account*.json
+# Access-control policy with credential hashes (template: access_control.example.json)
+access_control.json
 
 # ---- Local databases ---------------------------------------------------------
 *.db
@@ -25,6 +28,11 @@ service-account*.json
 *.db-journal
 *.db-wal
 *.db-shm
+# Local database backups and every other artifact written next to them (migration scripts)
+/backups/
+
+# ---- Local scratch work --------------------------------------------------------
+/scratch/
 
 # ---- Uploaded legal documents (STORAGE_PATH) ---------------------------------
 storage/

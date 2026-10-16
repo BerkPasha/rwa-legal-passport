@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { http, HttpResponse } from 'msw'
 import { server } from './mocks/server'
+import { MOCK_PASSPORT } from './mocks/handlers'
 import { PassportPreview } from '../pages/PassportPreview'
 import { AuthProvider } from '../AuthContext'
 
@@ -124,5 +125,88 @@ describe('PassportPreview', () => {
     expect(within(card).getByText('claude-haiku-4-5-20251001')).toBeInTheDocument()
     expect(within(card).getByText('Q4 2024 Prospectus (v1)')).toBeInTheDocument()
     expect(within(card).queryByText(/Invalid Date/)).not.toBeInTheDocument()
+  })
+})
+
+describe('PassportPreview approval integrity (Stage 9B-3)', () => {
+  async function lookup() {
+    renderWithProviders()
+    await userEvent.type(screen.getByPlaceholderText('MRPROP'), 'MRPROP')
+    await userEvent.type(screen.getByPlaceholderText('G…'), 'GABC1234')
+    await userEvent.type(screen.getByPlaceholderText(/X-API-Key/i), 'test-inst-key-alpha')
+    await userEvent.click(screen.getByRole('button', { name: /fetch legal passport/i }))
+    return screen.findByTestId('passport-card')
+  }
+
+  it('labels issuer attestation as not independently verified', async () => {
+    const card = await lookup()
+    expect(within(card).getByTestId('verification-level-badge')).toHaveTextContent(
+      'Issuer attested — not independently verified',
+    )
+    expect(within(card).getByTestId('passport-right-badge')).toHaveTextContent('Evidence cited')
+    expect(within(card).queryByText('Independently verified')).not.toBeInTheDocument()
+  })
+
+  it('shows conflicting sources without presenting a value as approved', async () => {
+    const conflicting = {
+      ...MOCK_PASSPORT,
+      legal_rights: [
+        {
+          ...MOCK_PASSPORT.legal_rights[0],
+          value: 'conflicting',
+          verified: false,
+          independently_verified: false,
+          conflict: true,
+          source_page: null,
+          supporting_passage: null,
+          sources: [
+            { ...MOCK_PASSPORT.legal_rights[0].sources[0] },
+            {
+              ...MOCK_PASSPORT.legal_rights[0].sources[0],
+              document_id: 'doc-002',
+              document_title: 'Legal Opinion',
+              value: 'Leasehold interest only',
+            },
+          ],
+        },
+      ],
+      excluded_documents: [
+        {
+          document_id: 'doc-003',
+          title: 'Title Deed',
+          document_type: 'title_deed',
+          reasons: ['document_version_superseded' as const],
+        },
+      ],
+    }
+    server.use(
+      http.get('http://localhost:8000/passport/:network/:assetCode/:issuerKey', () => HttpResponse.json(conflicting)),
+    )
+    const card = await lookup()
+    expect(within(card).getByTestId('passport-right-badge')).toHaveTextContent('Conflicting sources')
+    expect(within(card).getByText(/Approved documents disagree/)).toBeInTheDocument()
+    expect(within(card).getByText(/Leasehold interest only/)).toBeInTheDocument()
+    expect(within(card).getByText(/Direct fractional ownership/)).toBeInTheDocument()
+    expect(within(card).getByTestId('excluded-documents')).toHaveTextContent(
+      'Title Deed: A newer document version exists',
+    )
+  })
+
+  it('shows the 409 stale-approval response as an error, never as a passport', async () => {
+    server.use(
+      http.get('http://localhost:8000/passport/:network/:assetCode/:issuerKey', () =>
+        HttpResponse.json(
+          { detail: 'The legal approval for this asset is no longer current; a re-review is required.' },
+          { status: 409 },
+        ),
+      ),
+    )
+    renderWithProviders()
+    await userEvent.type(screen.getByPlaceholderText('MRPROP'), 'MRPROP')
+    await userEvent.type(screen.getByPlaceholderText('G…'), 'GABC1234')
+    await userEvent.type(screen.getByPlaceholderText(/X-API-Key/i), 'test-inst-key-alpha')
+    await userEvent.click(screen.getByRole('button', { name: /fetch legal passport/i }))
+    expect(await screen.findByText(/409: The legal approval for this asset is no longer current/)).toBeInTheDocument()
+    expect(screen.queryByTestId('passport-card')).not.toBeInTheDocument()
   })
 })

@@ -1,0 +1,39 @@
+{
+  "issuers": [
+    { "id": "example-issuer", "name": "Example Issuer Holdings LLC" },
+    { "id": "second-issuer", "name": "Second Issuer Ltd" }
+  ],
+  "users": [
+    {
+      "user_id": "ops-admin-01",
+      "display_name": "Platform Operator",
+      "role": "platform_admin",
+      "token_sha256": "REPLACE-with-output-of-python-m-app.access_tool-new-token"
+    },
+    {
+      "user_id": "issuer-reviewer-01",
+      "display_name": "Issuer Reviewer",
+      "role": "issuer_reviewer",
+      "issuer_ids": ["example-issuer"],
+      "token_sha256": "REPLACE-with-output-of-python-m-app.access_tool-new-token"
+    },
+    {
+      "user_id": "legal-reviewer-01",
+      "display_name": "Independent Legal Reviewer",
+      "role": "independent_legal_reviewer",
+      "issuer_ids": ["example-issuer", "second-issuer"],
+      "token_sha256": "REPLACE-with-output-of-python-m-app.access_tool-new-token",
+      "enabled": true
+    }
+  ],
+  "institutional_clients": [
+    {
+      "client_id": "example-institution-001",
+      "organization": "Example Institutional Investor",
+      "key_sha256": "REPLACE-with-output-of-python-m-app.access_tool-new-token",
+      "issuer_ids": ["example-issuer"],
+      "asset_ids": [],
+      "operations": ["passport:read"]
+    }
+  ]
+}

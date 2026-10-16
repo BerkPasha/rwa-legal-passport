@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import { getAssets, ApiError } from '../api'
 import type { Asset } from '../types'
 import { PageSpinner } from '../components/Spinner'
-import { ExtractionStatusBadge } from '../components/StatusBadge'
 
 function StatCard({
   label,
@@ -161,9 +160,17 @@ export function Dashboard() {
                     <p className="text-sm text-slate-500">{asset.issuer_organization_name}</p>
                   </div>
                   <div className="flex items-center gap-3">
-                    <ExtractionStatusBadge
-                      status={asset.status === 'active' ? 'approved' : asset.status === 'suspended' ? 'under_review' : 'draft'}
-                    />
+                    {/* The asset's registry status — not an approval of its legal information */}
+                    <span
+                      data-testid="asset-status-badge"
+                      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ring-1 ring-inset ${
+                        asset.status === 'active' ? 'bg-green-100 text-green-700 ring-green-200' :
+                        asset.status === 'suspended' ? 'bg-amber-100 text-amber-700 ring-amber-200' :
+                        'bg-slate-100 text-slate-600 ring-slate-200'
+                      }`}
+                    >
+                      {asset.status}
+                    </span>
                     <span className="text-xs text-slate-400">
                       {asset.blockchain_network === 'stellar-mainnet' ? 'Mainnet' : 'Testnet'}
                     </span>

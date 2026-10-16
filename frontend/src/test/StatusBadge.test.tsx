@@ -37,10 +37,10 @@ describe('ApprovalTypeBadge', () => {
     expect(el.className).toContain('blue')
   })
 
-  it('renders Legal Verification label with indigo color', () => {
+  it('renders the independent legal review label with indigo color', () => {
     render(<ApprovalTypeBadge type="legal_verification" />)
     const el = screen.getByTestId('approval-type-badge')
-    expect(el).toHaveTextContent('Legal Verification')
+    expect(el).toHaveTextContent('Independent Legal Review')
     expect(el.className).toContain('indigo')
   })
 })

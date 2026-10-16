@@ -1,25 +1,28 @@
 """
-Stellar blockchain doğrulama endpoint'i.
+Stellar blockchain verification endpoint.
 
 GET /assets/{asset_id}/blockchain-status
-  → Varlığın Stellar ağında kayıtlı olup olmadığını sorgular.
-  → Yalnızca Horizon REST API'den okunan ağ verisi döner.
-  → Hiçbir zaman yasal mülkiyet iddiasında bulunmaz.
+  → Queries whether the asset is registered on the Stellar network.
+  → Returns only network data read from the Horizon REST API.
+  → Never makes any claim of legal ownership.
 
-Tasarım kararları:
-- Salt okunur: cüzdan, özel anahtar veya imzalama yoktur.
-- Kimlik doğrulama gerekmez: blockchain verisi herkese açık.
-- Ağ hatası → 503 Service Unavailable (geçici arıza).
-- Varlık ağda bulunmasa da 200 döner; found_on_network=False ile belirtilir.
+Design decisions:
+- Read-only: no wallet, private key or signing.
+- Authentication and the asset:read permission are required: although Horizon data
+  is public, this endpoint reveals the internal asset registry and the issuer scope.
+- Network error → 503 Service Unavailable (temporary failure).
+- Returns 200 even if the asset is not found on the network; indicated by found_on_network=False.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.access_registry import Principal
+from app.auth import require_permission
+from app.authorization import get_asset_for_principal
 from app.db.session import get_db
 from app.enums import BlockchainNetwork
-from app.models.asset import Asset
+from app.permissions import Permission
 from app.schemas.blockchain import (
     AssetFlagsResponse,
     BlockchainStatusResponse,
@@ -39,27 +42,23 @@ router = APIRouter(tags=["Blockchain Verification"])
     "/assets/{asset_id}/blockchain-status",
     response_model=BlockchainStatusResponse,
     status_code=status.HTTP_200_OK,
-    summary="Stellar ağında varlık kaydını sorgula — salt okunur",
+    summary="Query the asset record on the Stellar network — read-only",
     description=(
-        "Varlığın Stellar Horizon ağında kayıtlı olup olmadığını döndürür. "
-        "Bu endpoint hiçbir zaman yasal mülkiyet iddiasında bulunmaz. "
-        "Kimlik doğrulama gerekmez; blockchain verisi herkese açıktır."
+        "Returns whether the asset is registered on the Stellar Horizon network. "
+        "This endpoint never makes any claim of legal ownership. "
+        "Requires a Bearer token and the asset:read permission; only assets within scope can be queried."
     ),
 )
 async def get_blockchain_status(
     asset_id: str,
+    principal: Principal = Depends(require_permission(Permission.asset_read)),
     db: AsyncSession = Depends(get_db),
     stellar: StellarService = Depends(get_stellar_service),
 ) -> BlockchainStatusResponse:
-    # ── 1. Varlığı veritabanından yükle ────────────────────────────────────────
-    result = await db.execute(select(Asset).where(Asset.id == asset_id))
-    asset = result.scalar_one_or_none()
-    if asset is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Varlık bulunamadı."
-        )
+    # ── 1. Load the asset from the database (issuer scope) ─────────────────────
+    asset = await get_asset_for_principal(db, asset_id, principal, "Asset not found.")
 
-    # ── 2. Stellar Horizon'dan varlık bilgisi al ───────────────────────────────
+    # ── 2. Fetch asset information from Stellar Horizon ────────────────────────
     network = BlockchainNetwork(asset.blockchain_network)
     try:
         info = await stellar.get_asset_info(
@@ -73,7 +72,7 @@ async def get_blockchain_status(
             detail=str(exc),
         )
 
-    # ── 3. Yanıt oluştur ───────────────────────────────────────────────────────
+    # ── 3. Build the response ──────────────────────────────────────────────────
     record_resp = None
     if info.record is not None:
         record_resp = HorizonRecordResponse(

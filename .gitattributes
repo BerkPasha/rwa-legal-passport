@@ -2,3 +2,7 @@
 # and goto targets in LF-only files, which would break start-rwa.bat.
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Byte-for-byte historical SQLite schema (pre-Stage 9B-3): its trailing spaces are part of the
+# recorded DDL, so only trailing-whitespace detection is disabled, for this one file.
+tests/fixtures/schema_pre_9b3.sql whitespace=-blank-at-eol

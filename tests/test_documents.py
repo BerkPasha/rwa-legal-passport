@@ -1,19 +1,19 @@
 """
-Phase 3 — Yasal Belge Yönetimi testleri.
+Phase 3 — Legal Document Management tests.
 
-Kurgusal test verisi kullanılmaktadır.
-Tüm PDF'ler pypdf ile bellekte oluşturulan minimal dosyalardır.
+Fictional test data is used.
+All PDFs are minimal files created in memory with pypdf.
 """
 
 import pytest
 from httpx import AsyncClient
 
 
-# ── Yardımcı fonksiyon ────────────────────────────────────────────────────────
+# ── Helper function ───────────────────────────────────────────────────────────
 
 
 async def _upload(client: AsyncClient, asset_id: str, pdf: bytes, **kwargs) -> dict:
-    """Tekrar eden yükleme kodunu kısaltır."""
+    """Shortens the repeated upload code."""
     doc_type = kwargs.get("document_type", "prospectus")
     title = kwargs.get("title", "Q4 2024 Prospectus — Meridian Property Holdings LLC")
     filename = kwargs.get("filename", "test.pdf")
@@ -27,15 +27,15 @@ async def _upload(client: AsyncClient, asset_id: str, pdf: bytes, **kwargs) -> d
     return resp
 
 
-# ── Başarılı senaryolar ───────────────────────────────────────────────────────
+# ── Success scenarios ─────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_upload_document_returns_201(
-    client: AsyncClient, created_asset: dict, minimal_pdf: bytes
+    issuer_client: AsyncClient, created_asset: dict, minimal_pdf: bytes
 ):
-    """Geçerli PDF yüklemesi 201 ve belge kaydı döndürmeli."""
-    resp = await _upload(client, created_asset["id"], minimal_pdf)
+    """A valid PDF upload must return 201 and the document record."""
+    resp = await _upload(issuer_client, created_asset["id"], minimal_pdf)
 
     assert resp.status_code == 201
     data = resp.json()
@@ -48,13 +48,13 @@ async def test_upload_document_returns_201(
 
 @pytest.mark.asyncio
 async def test_upload_document_stores_sha256_hash(
-    client: AsyncClient, created_asset: dict, minimal_pdf: bytes
+    issuer_client: AsyncClient, created_asset: dict, minimal_pdf: bytes
 ):
-    """Yüklenen belgenin SHA-256 parmak izi hesaplanmalı ve saklanmalı."""
+    """The SHA-256 fingerprint of the uploaded document must be calculated and stored."""
     import hashlib
     expected_hash = hashlib.sha256(minimal_pdf).hexdigest()
 
-    resp = await _upload(client, created_asset["id"], minimal_pdf)
+    resp = await _upload(issuer_client, created_asset["id"], minimal_pdf)
     data = resp.json()
 
     assert data["current_version"]["sha256_hash"] == expected_hash
@@ -63,13 +63,13 @@ async def test_upload_document_stores_sha256_hash(
 
 @pytest.mark.asyncio
 async def test_upload_document_extracts_pages(
-    client: AsyncClient, created_asset: dict, minimal_pdf: bytes
+    issuer_client: AsyncClient, created_asset: dict, minimal_pdf: bytes
 ):
-    """Tek sayfalık PDF yüklendiğinde sayfa kaydı oluşturulmalı."""
-    resp = await _upload(client, created_asset["id"], minimal_pdf)
+    """Uploading a single-page PDF must create a page record."""
+    resp = await _upload(issuer_client, created_asset["id"], minimal_pdf)
     doc_id = resp.json()["id"]
 
-    text_resp = await client.get(f"/documents/{doc_id}/text")
+    text_resp = await issuer_client.get(f"/documents/{doc_id}/text")
 
     assert text_resp.status_code == 200
     data = text_resp.json()
@@ -80,13 +80,13 @@ async def test_upload_document_extracts_pages(
 
 @pytest.mark.asyncio
 async def test_upload_document_file_preserved(
-    client: AsyncClient, created_asset: dict, minimal_pdf: bytes
+    issuer_client: AsyncClient, created_asset: dict, minimal_pdf: bytes
 ):
-    """İndirilen dosya orijinal baytlarla birebir eşleşmeli."""
-    resp = await _upload(client, created_asset["id"], minimal_pdf)
+    """The downloaded file must match the original bytes exactly."""
+    resp = await _upload(issuer_client, created_asset["id"], minimal_pdf)
     doc_id = resp.json()["id"]
 
-    download_resp = await client.get(f"/documents/{doc_id}/download")
+    download_resp = await issuer_client.get(f"/documents/{doc_id}/download")
 
     assert download_resp.status_code == 200
     assert "application/pdf" in download_resp.headers.get("content-type", "")
@@ -95,13 +95,13 @@ async def test_upload_document_file_preserved(
 
 @pytest.mark.asyncio
 async def test_list_documents_for_asset(
-    client: AsyncClient, created_asset: dict, minimal_pdf: bytes
+    issuer_client: AsyncClient, created_asset: dict, minimal_pdf: bytes
 ):
-    """Varlık altına yüklenen belge listede görünmeli."""
+    """A document uploaded under an asset must appear in the list."""
     asset_id = created_asset["id"]
-    await _upload(client, asset_id, minimal_pdf, title="Tapu Senedi", document_type="title_deed")
+    await _upload(issuer_client, asset_id, minimal_pdf, title="Tapu Senedi", document_type="title_deed")
 
-    resp = await client.get(f"/assets/{asset_id}/documents")
+    resp = await issuer_client.get(f"/assets/{asset_id}/documents")
 
     assert resp.status_code == 200
     items = resp.json()
@@ -111,13 +111,13 @@ async def test_list_documents_for_asset(
 
 @pytest.mark.asyncio
 async def test_get_document_by_id(
-    client: AsyncClient, created_asset: dict, minimal_pdf: bytes
+    issuer_client: AsyncClient, created_asset: dict, minimal_pdf: bytes
 ):
-    """Belge ID ile doğru şekilde getirilmeli."""
-    upload_resp = await _upload(client, created_asset["id"], minimal_pdf)
+    """A document must be fetched correctly by ID."""
+    upload_resp = await _upload(issuer_client, created_asset["id"], minimal_pdf)
     doc_id = upload_resp.json()["id"]
 
-    resp = await client.get(f"/documents/{doc_id}")
+    resp = await issuer_client.get(f"/documents/{doc_id}")
 
     assert resp.status_code == 200
     assert resp.json()["id"] == doc_id
@@ -126,13 +126,13 @@ async def test_get_document_by_id(
 
 @pytest.mark.asyncio
 async def test_get_document_text_version_reference(
-    client: AsyncClient, created_asset: dict, minimal_pdf: bytes
+    issuer_client: AsyncClient, created_asset: dict, minimal_pdf: bytes
 ):
-    """Metin yanıtı hangi versiyona ait olduğunu bildirmeli."""
-    upload_resp = await _upload(client, created_asset["id"], minimal_pdf)
+    """The text response must state which version it belongs to."""
+    upload_resp = await _upload(issuer_client, created_asset["id"], minimal_pdf)
     doc_id = upload_resp.json()["id"]
 
-    resp = await client.get(f"/documents/{doc_id}/text")
+    resp = await issuer_client.get(f"/documents/{doc_id}/text")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -142,14 +142,14 @@ async def test_get_document_text_version_reference(
 
 @pytest.mark.asyncio
 async def test_upload_new_version_increments_number(
-    client: AsyncClient, created_asset: dict, minimal_pdf: bytes
+    issuer_client: AsyncClient, created_asset: dict, minimal_pdf: bytes
 ):
-    """Aynı belgeye ikinci yükleme versiyon numarasını 2 yapmalı."""
+    """A second upload to the same document must set the version number to 2."""
     asset_id = created_asset["id"]
-    first = await _upload(client, asset_id, minimal_pdf)
+    first = await _upload(issuer_client, asset_id, minimal_pdf)
     doc_id = first.json()["id"]
 
-    resp = await client.post(
+    resp = await issuer_client.post(
         f"/documents/{doc_id}/versions",
         files={"file": ("v2.pdf", minimal_pdf, "application/pdf")},
     )
@@ -160,19 +160,19 @@ async def test_upload_new_version_increments_number(
 
 @pytest.mark.asyncio
 async def test_list_versions_shows_history(
-    client: AsyncClient, created_asset: dict, minimal_pdf: bytes
+    issuer_client: AsyncClient, created_asset: dict, minimal_pdf: bytes
 ):
-    """İki versiyon yüklendikten sonra geçmiş listesi ikisini de içermeli."""
+    """After two versions are uploaded, the history list must contain both."""
     asset_id = created_asset["id"]
-    first = await _upload(client, asset_id, minimal_pdf)
+    first = await _upload(issuer_client, asset_id, minimal_pdf)
     doc_id = first.json()["id"]
 
-    await client.post(
+    await issuer_client.post(
         f"/documents/{doc_id}/versions",
         files={"file": ("v2.pdf", minimal_pdf, "application/pdf")},
     )
 
-    resp = await client.get(f"/documents/{doc_id}/versions")
+    resp = await issuer_client.get(f"/documents/{doc_id}/versions")
 
     assert resp.status_code == 200
     versions = resp.json()
@@ -183,25 +183,25 @@ async def test_list_versions_shows_history(
 
 @pytest.mark.asyncio
 async def test_document_linked_to_asset(
-    client: AsyncClient, created_asset: dict, minimal_pdf: bytes
+    issuer_client: AsyncClient, created_asset: dict, minimal_pdf: bytes
 ):
-    """Belge, yüklendiği varlığa doğru şekilde bağlanmalı."""
+    """A document must be linked correctly to the asset it was uploaded to."""
     asset_id = created_asset["id"]
-    resp = await _upload(client, asset_id, minimal_pdf)
+    resp = await _upload(issuer_client, asset_id, minimal_pdf)
 
     assert resp.json()["asset_id"] == asset_id
 
 
-# ── Hata / doğrulama senaryoları ──────────────────────────────────────────────
+# ── Error / validation scenarios ──────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_upload_wrong_file_extension_returns_415(
-    client: AsyncClient, created_asset: dict
+    issuer_client: AsyncClient, created_asset: dict
 ):
-    """PDF olmayan uzantı (örn. .txt) reddedilmeli."""
+    """A non-PDF extension (e.g. .txt) must be rejected."""
     fake_content = b"Bu bir metin dosyasidir."
-    resp = await client.post(
+    resp = await issuer_client.post(
         f"/assets/{created_asset['id']}/documents",
         data={"document_type": "other", "title": "Yanlış Tip"},
         files={"file": ("belge.txt", fake_content, "text/plain")},
@@ -211,11 +211,11 @@ async def test_upload_wrong_file_extension_returns_415(
 
 @pytest.mark.asyncio
 async def test_upload_fake_pdf_magic_bytes_returns_415(
-    client: AsyncClient, created_asset: dict
+    issuer_client: AsyncClient, created_asset: dict
 ):
-    """'.pdf' uzantılı ama geçersiz içerikli dosya reddedilmeli."""
+    """A file with a '.pdf' extension but invalid content must be rejected."""
     fake_pdf = b"Bu PDF degil ama uzantisi pdf."
-    resp = await client.post(
+    resp = await issuer_client.post(
         f"/assets/{created_asset['id']}/documents",
         data={"document_type": "other", "title": "Sahte PDF"},
         files={"file": ("sahte.pdf", fake_pdf, "application/pdf")},
@@ -225,18 +225,18 @@ async def test_upload_fake_pdf_magic_bytes_returns_415(
 
 @pytest.mark.asyncio
 async def test_upload_exceeds_size_limit_returns_413(
-    client: AsyncClient, created_asset: dict, monkeypatch
+    issuer_client: AsyncClient, created_asset: dict, monkeypatch
 ):
     """
-    Boyut sınırını aşan dosya 413 döndürmeli.
-    Sınırı 0 MB'a çekerek küçük bir dosyayla testi hızlı çalıştırırız.
+    A file exceeding the size limit must return 413.
+    We lower the limit to 0 MB so the test runs quickly with a small file.
     """
     from app.config import settings
     monkeypatch.setattr(settings, "max_upload_size_mb", 0)
 
-    # 0 MB limit → herhangi bir PDF içeriği sınırı aşar
+    # 0 MB limit → any PDF content exceeds the limit
     tiny_content = b"%PDF-1.4\n" + b"x" * 10
-    resp = await client.post(
+    resp = await issuer_client.post(
         f"/assets/{created_asset['id']}/documents",
         data={"document_type": "other", "title": "Büyük Dosya"},
         files={"file": ("buyuk.pdf", tiny_content, "application/pdf")},
@@ -246,10 +246,10 @@ async def test_upload_exceeds_size_limit_returns_413(
 
 @pytest.mark.asyncio
 async def test_upload_to_nonexistent_asset_returns_404(
-    client: AsyncClient, minimal_pdf: bytes
+    issuer_client: AsyncClient, minimal_pdf: bytes
 ):
-    """Var olmayan varlığa belge yükleme girişimi 404 döndürmeli."""
-    resp = await client.post(
+    """An attempt to upload a document to a non-existent asset must return 404."""
+    resp = await issuer_client.post(
         "/assets/nonexistent-asset-id-00000/documents",
         data={"document_type": "other", "title": "Test"},
         files={"file": ("test.pdf", minimal_pdf, "application/pdf")},
@@ -258,25 +258,25 @@ async def test_upload_to_nonexistent_asset_returns_404(
 
 
 @pytest.mark.asyncio
-async def test_get_document_not_found_returns_404(client: AsyncClient):
-    """Var olmayan belge ID'si 404 döndürmeli."""
-    resp = await client.get("/documents/nonexistent-document-id-000")
+async def test_get_document_not_found_returns_404(issuer_client: AsyncClient):
+    """A non-existent document ID must return 404."""
+    resp = await issuer_client.get("/documents/nonexistent-document-id-000")
     assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_get_text_of_nonexistent_document_returns_404(client: AsyncClient):
-    """Var olmayan belgenin metin endpoint'i 404 döndürmeli."""
-    resp = await client.get("/documents/nonexistent-document-id-000/text")
+async def test_get_text_of_nonexistent_document_returns_404(issuer_client: AsyncClient):
+    """The text endpoint of a non-existent document must return 404."""
+    resp = await issuer_client.get("/documents/nonexistent-document-id-000/text")
     assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_upload_new_version_to_nonexistent_document_returns_404(
-    client: AsyncClient, minimal_pdf: bytes
+    issuer_client: AsyncClient, minimal_pdf: bytes
 ):
-    """Var olmayan belgeye yeni versiyon yükleme girişimi 404 döndürmeli."""
-    resp = await client.post(
+    """An attempt to upload a new version to a non-existent document must return 404."""
+    resp = await issuer_client.post(
         "/documents/nonexistent-document-id-000/versions",
         files={"file": ("v2.pdf", minimal_pdf, "application/pdf")},
     )

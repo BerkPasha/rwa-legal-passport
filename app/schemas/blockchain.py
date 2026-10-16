@@ -7,7 +7,7 @@ from app.enums import BlockchainNetwork
 
 
 class AssetFlagsResponse(BaseModel):
-    """Stellar ihraçcı hesabının izin bayrakları."""
+    """Permission flags of the Stellar issuer account."""
     auth_required: bool
     auth_revocable: bool
     auth_immutable: bool
@@ -15,19 +15,19 @@ class AssetFlagsResponse(BaseModel):
 
 
 class HorizonRecordResponse(BaseModel):
-    """Horizon'dan alınan ham varlık kaydının normalize edilmiş biçimi."""
-    asset_type: str     # credit_alphanum4 veya credit_alphanum12
-    num_accounts: int   # ağdaki token sahiplerinin sayısı
-    total_supply: str   # toplam dolaşım miktarı (7 ondalık basamak)
+    """Normalized form of the raw asset record retrieved from Horizon."""
+    asset_type: str     # credit_alphanum4 or credit_alphanum12
+    num_accounts: int   # number of token holders on the network
+    total_supply: str   # total circulating supply (7 decimal places)
     flags: AssetFlagsResponse
 
 
 class BlockchainStatusResponse(BaseModel):
     """
-    GET /assets/{id}/blockchain-status yanıtı.
+    Response of GET /assets/{id}/blockchain-status.
 
-    Önemli: found_on_network=True, yasal mülkiyeti kanıtlamaz.
-    Yanıt her zaman disclaimer içerir.
+    Important: found_on_network=True does not prove legal ownership.
+    The response always includes the disclaimer.
     """
     asset_id: str
     asset_code: str
@@ -37,5 +37,5 @@ class BlockchainStatusResponse(BaseModel):
     found_on_network: bool
     record: Optional[HorizonRecordResponse] = None
     retrieved_at: datetime
-    # Her yanıtta zorunlu — blockchain kaydı ≠ yasal hak
+    # Mandatory in every response — blockchain record ≠ legal right
     disclaimer: str

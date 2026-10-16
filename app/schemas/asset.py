@@ -3,6 +3,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.access_registry import ISSUER_ID_PATTERN
 from app.enums import AssetStatus, AssetType, BlockchainNetwork
 from app.validators.stellar import is_valid_stellar_asset_code, is_valid_stellar_public_key
 
@@ -21,7 +22,7 @@ class _BlockchainMeta(BaseModel):
     @field_validator("stellar_asset_code")
     @classmethod
     def _check_asset_code(cls, v: str) -> str:
-        v = v.strip()  # Boşluk temizle ama büyük harfe çevirme — API katı olmalı
+        v = v.strip()  # Strip whitespace but do not upper-case — the API must stay strict
         if not is_valid_stellar_asset_code(v):
             raise ValueError(
                 "stellar_asset_code must be 1-12 uppercase alphanumeric characters "
@@ -56,14 +57,24 @@ class _LegalMeta(BaseModel):
 # ── Public schemas ────────────────────────────────────────────────────────────
 
 
-class AssetCreate(_BlockchainMeta, _LegalMeta):
+class _TenantMeta(BaseModel):
+    """
+    Owning issuer (tenant) — must reference an issuer in the access-control
+    registry. Set at creation time and immutable afterwards.
+    """
+
+    issuer_id: str = Field(..., min_length=1, max_length=64, pattern=ISSUER_ID_PATTERN)
+
+
+class AssetCreate(_BlockchainMeta, _TenantMeta, _LegalMeta):
     """Full payload required to register a new tokenized asset."""
 
 
 class AssetUpdate(BaseModel):
     """
     Partial update schema — only legal/organizational fields may change.
-    Blockchain identity fields (network, code, issuer key) are immutable.
+    Blockchain identity fields (network, code, issuer key) and the owning
+    issuer_id are immutable.
     """
 
     issuer_organization_name: Optional[str] = Field(None, min_length=1, max_length=255)
@@ -72,10 +83,12 @@ class AssetUpdate(BaseModel):
     status: Optional[AssetStatus] = None
 
 
-class AssetResponse(_BlockchainMeta, _LegalMeta):
+class AssetResponse(_BlockchainMeta, _TenantMeta, _LegalMeta):
     id: str
     status: AssetStatus
     created_at: datetime
     updated_at: datetime
+    # Incremented on every material change; approvals bound to an older revision are stale
+    material_revision: int
 
     model_config = ConfigDict(from_attributes=True)

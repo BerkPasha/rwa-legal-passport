@@ -1,11 +1,11 @@
 """
-Mock Stellar servisi — otomatik testler için.
+Mock Stellar service — for automated tests.
 
-Gerçek Horizon API'ye istek atmaz.
-Üç senaryo destekler:
-  "found"     — varlık ağda kayıtlı (standart başarılı yanıt)
-  "not_found" — varlık Stellar ağında bulunmuyor
-  "error"     — Horizon ulaşılamaz (ağ hatası simülasyonu)
+Sends no request to the real Horizon API.
+Supports three scenarios:
+  "found"     — asset registered on the network (standard successful response)
+  "not_found" — asset does not exist on the Stellar network
+  "error"     — Horizon unreachable (network error simulation)
 """
 
 from datetime import datetime, timezone
@@ -21,7 +21,7 @@ from app.services.stellar import (
 
 
 class MockStellarService:
-    """StellarService ile aynı arayüzü uygular; HTTP çağrısı yapmaz."""
+    """Implements the same interface as StellarService; makes no HTTP call."""
 
     def __init__(self, scenario: str = "found") -> None:
         assert scenario in {"found", "not_found", "error"}
@@ -37,7 +37,7 @@ class MockStellarService:
 
         if self._scenario == "error":
             raise StellarNetworkError(
-                f"Horizon bağlantısı zaman aşımına uğradı ({network.value})."
+                f"Horizon connection timed out ({network.value})."
             )
 
         if self._scenario == "not_found":
@@ -48,7 +48,7 @@ class MockStellarService:
                 retrieved_at=datetime.now(timezone.utc),
             )
 
-        # "found": gerçekçi bir Horizon kaydını taklit eder
+        # "found": imitates a realistic Horizon record
         asset_type = (
             "credit_alphanum4" if len(asset_code) <= 4 else "credit_alphanum12"
         )

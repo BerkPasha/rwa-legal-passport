@@ -10,10 +10,10 @@ class HealthResponse(BaseModel):
     environment: str
 
 
-@router.get("/health", response_model=HealthResponse, summary="Sistem sağlık kontrolü")
+@router.get("/health", response_model=HealthResponse, summary="System health check")
 async def health_check() -> HealthResponse:
     """
-    Sunucunun ayakta olup olmadığını ve temel bilgilerini döner.
+    Returns whether the server is up, together with basic information.
     """
     from app.config import settings
 

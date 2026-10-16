@@ -1,12 +1,12 @@
 """
-Phase 5 — İnceleme ve onay iş akışı testleri (15 test).
+Phase 5 — Review and approval workflow tests (15 tests).
 
-Kapsam:
- 1. Kimlik doğrulama — yetkisiz ve geçersiz token
- 2. start_review — başarılı geçiş, zaten onaylanmış çakışma, bulunamadı
- 3. correct_claim — denetim kaydı, otomatik under_review, onaylı çıkarım engeli, bulunamadı
- 4. approve_extraction — ihraç eden ve hukuki onay türleri, kaynak kanıt eksikliği, AI yasağı, bulunamadı
- 5. list_corrections / list_approvals — kayıt sonrası liste doğrulaması
+Coverage:
+ 1. Authentication — unauthorized and invalid token
+ 2. start_review — successful transition, already-approved conflict, not found
+ 3. correct_claim — audit record, automatic under_review, approved-extraction block, not found
+ 4. approve_extraction — issuer and legal approval types, missing source evidence, AI ban, not found
+ 5. list_corrections / list_approvals — list verification after records are created
 """
 
 import pytest
@@ -17,13 +17,29 @@ from app.models.extraction import LegalClaim
 from sqlalchemy import select
 
 
-# ── 1. Kimlik doğrulama ───────────────────────────────────────────────────────
+def _same_evidence(claim: dict) -> dict:
+    """A changed value needs explicit evidence (Stage 9B-4 step 7); here the claim's own, re-cited."""
+    return {"corrected_source_page": claim["source_page"], "corrected_passage": claim["supporting_passage"]}
+
+
+def _as_read(claim: dict) -> dict:
+    """The mandatory correction precondition (Stage 9B-4 issue A): the claim exactly as read."""
+    return {key: claim[key] for key in ("value", "is_unknown", "source_page", "supporting_passage")}
+
+
+async def _patch_as_read(client: AsyncClient, claim: dict, url: str, **kwargs):
+    """A correction stating `claim` as read; the request-body lines of the tests stay as they are."""
+    kwargs["json"] = {**kwargs["json"], "expected_claim": _as_read(claim)}
+    return await client.patch(url, **kwargs)
+
+
+# ── 1. Authentication ─────────────────────────────────────────────────────────
 
 
 async def test_start_review_unauthenticated(client: AsyncClient, created_extraction: dict):
     """
-    Authorization başlığı hiç gönderilmediğinde HTTPBearer 403 döner.
-    (FastAPI varsayılan davranışı: başlık eksikse 403, geçersiz token ise 401.)
+    When no Authorization header is sent at all, HTTPBearer returns 403.
+    (FastAPI default behaviour: 403 if the header is missing, 401 if the token is invalid.)
     """
     eid = created_extraction["id"]
     r = await client.post(f"/extractions/{eid}/review")
@@ -31,7 +47,7 @@ async def test_start_review_unauthenticated(client: AsyncClient, created_extract
 
 
 async def test_start_review_invalid_token(client: AsyncClient, created_extraction: dict):
-    """Geçersiz token → 401."""
+    """Invalid token → 401."""
     eid = created_extraction["id"]
     r = await client.post(
         f"/extractions/{eid}/review",
@@ -48,7 +64,7 @@ async def test_start_review_success(
     created_extraction: dict,
     issuer_headers: dict,
 ):
-    """Taslak çıkarım incelemeye alınır; dönen yanıt under_review durumunu yansıtır."""
+    """A draft extraction is moved under review; the response reflects the under_review status."""
     eid = created_extraction["id"]
     r = await client.post(f"/extractions/{eid}/review", headers=issuer_headers)
     assert r.status_code == 200
@@ -64,20 +80,20 @@ async def test_start_review_already_approved_conflict(
     created_extraction: dict,
     issuer_headers: dict,
 ):
-    """Onaylanmış çıkarım yeniden incelemeye alınamaz — 409 Conflict."""
+    """An approved extraction cannot be moved back under review — 409 Conflict."""
     eid = created_extraction["id"]
-    # Önce onayla
+    # Approve first
     approve_r = await client.post(
         f"/extractions/{eid}/approvals", headers=issuer_headers, json={}
     )
     assert approve_r.status_code == 201
-    # Sonra incelemeye almayı dene
+    # Then try to move it under review
     r = await client.post(f"/extractions/{eid}/review", headers=issuer_headers)
     assert r.status_code == 409
 
 
 async def test_start_review_not_found(client: AsyncClient, issuer_headers: dict):
-    """Var olmayan çıkarım → 404."""
+    """Non-existent extraction → 404."""
     r = await client.post(
         "/extractions/00000000-0000-0000-0000-000000000000/review",
         headers=issuer_headers,
@@ -94,24 +110,26 @@ async def test_correct_claim_success_audit_record(
     issuer_headers: dict,
 ):
     """
-    Düzeltme yapıldığında:
-    - Denetim kaydı orijinal ve düzeltilmiş değerleri içerir.
-    - Yanıt tüm alanları doğru döndürür.
+    When a correction is made:
+    - The audit record contains the original and the corrected values.
+    - The response returns all fields correctly.
     """
     eid = created_extraction["id"]
-    # İlk iddia alfabetik sırayla 'income_rights' (is_unknown=False, orijinal değer var)
+    # In alphabetical order the first claim is 'income_rights' (is_unknown=False, has an original value)
     claim = created_extraction["claims"][0]
     cid = claim["id"]
     original_value = claim["value"]
 
+    # A changed value needs its own evidence (Stage 9B-4 step 7): an authentic quotation from page 2
     payload = {
-        "corrected_value": "Revised: quarterly distributions at fixed 5% yield.",
+        "corrected_value": "Revised: distributions paid within thirty days after each quarter.",
         "is_unknown": False,
-        "corrected_passage": "Token holders shall receive a fixed 5% annual yield.",
+        "corrected_source_page": 2,
+        "corrected_passage": "Distributions are paid within thirty days after the end of each calendar quarter.",
         "correction_note": "Prospektüs güncellemesine göre sabit getiri oranı belirlendi.",
     }
-    r = await client.patch(
-        f"/extractions/{eid}/claims/{cid}", headers=issuer_headers, json=payload
+    r = await _patch_as_read(
+        client, claim, f"/extractions/{eid}/claims/{cid}", headers=issuer_headers, json=payload
     )
     assert r.status_code == 200
     body = r.json()
@@ -123,6 +141,7 @@ async def test_correct_claim_success_audit_record(
     assert body["corrected_value"] == payload["corrected_value"]
     assert body["corrected_passage"] == payload["corrected_passage"]
     assert body["correction_note"] == payload["correction_note"]
+    assert (body["original_source_page"], body["corrected_source_page"], body["page_history_recorded"]) == (1, 2, True)
 
 
 async def test_correct_claim_auto_sets_under_review(
@@ -131,20 +150,21 @@ async def test_correct_claim_auto_sets_under_review(
     issuer_headers: dict,
 ):
     """
-    Taslak çıkarımda düzeltme yapıldığında durum otomatik olarak 'under_review' olur.
-    Çıkarım getirme endpoint'i güncellenmiş durumu döndürür.
+    When a draft extraction is corrected, its status automatically becomes 'under_review'.
+    The get-extraction endpoint returns the updated status.
     """
     eid = created_extraction["id"]
     claim = created_extraction["claims"][0]
     assert created_extraction["status"] == "draft"
 
-    await client.patch(
-        f"/extractions/{eid}/claims/{claim['id']}",
+    r = await _patch_as_read(
+        client, claim, f"/extractions/{eid}/claims/{claim['id']}",
         headers=issuer_headers,
-        json={"corrected_value": "Updated value.", "is_unknown": False},
+        json={"corrected_value": "Updated value.", "is_unknown": False, **_same_evidence(claim)},
     )
+    assert r.status_code == 200, r.text
 
-    get_r = await client.get(f"/extractions/{eid}")
+    get_r = await client.get(f"/extractions/{eid}", headers=issuer_headers)
     assert get_r.status_code == 200
     assert get_r.json()["status"] == "under_review"
 
@@ -154,14 +174,14 @@ async def test_correct_claim_approved_rejected(
     created_extraction: dict,
     issuer_headers: dict,
 ):
-    """Onaylanmış çıkarımda iddia düzeltilemez — 409 Conflict."""
+    """A claim of an approved extraction cannot be corrected — 409 Conflict."""
     eid = created_extraction["id"]
     claim = created_extraction["claims"][0]
-    # Önce onayla
+    # Approve first
     await client.post(f"/extractions/{eid}/approvals", headers=issuer_headers, json={})
 
-    r = await client.patch(
-        f"/extractions/{eid}/claims/{claim['id']}",
+    r = await _patch_as_read(
+        client, claim, f"/extractions/{eid}/claims/{claim['id']}",
         headers=issuer_headers,
         json={"corrected_value": "Değişiklik denemesi.", "is_unknown": False},
     )
@@ -173,10 +193,10 @@ async def test_correct_claim_not_found(
     created_extraction: dict,
     issuer_headers: dict,
 ):
-    """Var olmayan iddia ID'si → 404."""
+    """Non-existent claim ID → 404."""
     eid = created_extraction["id"]
-    r = await client.patch(
-        f"/extractions/{eid}/claims/00000000-0000-0000-0000-000000000000",
+    r = await _patch_as_read(
+        client, created_extraction["claims"][0], f"/extractions/{eid}/claims/00000000-0000-0000-0000-000000000000",
         headers=issuer_headers,
         json={"corrected_value": "Deneme.", "is_unknown": False},
     )
@@ -192,10 +212,10 @@ async def test_approve_issuer_success(
     issuer_headers: dict,
 ):
     """
-    İhraç eden inceleyicinin onayı:
+    Approval by the issuer reviewer:
     - approval_type = issuer_attestation
     - status = approved
-    - disclaimer alanı dolu
+    - disclaimer field populated
     """
     eid = created_extraction["id"]
     r = await client.post(
@@ -213,8 +233,8 @@ async def test_approve_issuer_success(
     assert body["notes"] == "Tüm alanlar ihraçcı belgesiyle uyumlu."
     assert body["approved_at"] is not None
 
-    # Çıkarım durumu approved olmalı
-    get_r = await client.get(f"/extractions/{eid}")
+    # The extraction status must be approved
+    get_r = await client.get(f"/extractions/{eid}", headers=issuer_headers)
     assert get_r.json()["status"] == "approved"
 
 
@@ -224,7 +244,7 @@ async def test_approve_legal_reviewer_success(
     legal_headers: dict,
 ):
     """
-    Bağımsız hukuk uzmanının onayı:
+    Approval by the independent legal expert:
     - approval_type = legal_verification
     """
     eid = created_extraction["id"]
@@ -247,12 +267,12 @@ async def test_approve_missing_source_evidence(
     issuer_headers: dict,
 ):
     """
-    Bilinen bir iddianın supporting_passage değeri boşaltıldığında
-    onay 422 Unprocessable Entity döner.
+    When the supporting_passage of a known claim is cleared,
+    the approval returns 422 Unprocessable Entity.
     """
     eid = created_extraction["id"]
 
-    # Doğrudan DB'de bilinen bir iddianın kanıt alanını sil
+    # Delete the evidence field of a known claim directly in the DB
     result = await async_db.execute(
         select(LegalClaim).where(
             LegalClaim.extraction_id == eid,
@@ -267,7 +287,7 @@ async def test_approve_missing_source_evidence(
         f"/extractions/{eid}/approvals", headers=issuer_headers, json={}
     )
     assert r.status_code == 422
-    assert "kaynak kanıt eksik" in r.json()["detail"]
+    assert "missing source evidence" in r.json()["detail"]
 
 
 async def test_approve_ai_forbidden(
@@ -275,7 +295,7 @@ async def test_approve_ai_forbidden(
     created_extraction: dict,
     ai_headers: dict,
 ):
-    """user_id 'ai-' ile başlayan kullanıcı onay yapamaz — 403 Forbidden."""
+    """A user whose user_id starts with 'ai-' cannot approve — 403 Forbidden."""
     eid = created_extraction["id"]
     r = await client.post(
         f"/extractions/{eid}/approvals", headers=ai_headers, json={}
@@ -284,7 +304,7 @@ async def test_approve_ai_forbidden(
 
 
 async def test_approve_not_found(client: AsyncClient, issuer_headers: dict):
-    """Var olmayan çıkarım → 404."""
+    """Non-existent extraction → 404."""
     r = await client.post(
         "/extractions/00000000-0000-0000-0000-000000000000/approvals",
         headers=issuer_headers,
@@ -301,16 +321,17 @@ async def test_list_corrections_after_correction(
     created_extraction: dict,
     issuer_headers: dict,
 ):
-    """Düzeltme yapıldıktan sonra liste endpoint'i kayıtları döndürür."""
+    """After a correction is made, the list endpoint returns the records."""
     eid = created_extraction["id"]
     claim = created_extraction["claims"][0]
 
-    # Düzelt
-    await client.patch(
-        f"/extractions/{eid}/claims/{claim['id']}",
+    # Correct
+    r = await _patch_as_read(
+        client, claim, f"/extractions/{eid}/claims/{claim['id']}",
         headers=issuer_headers,
-        json={"corrected_value": "Güncellenmiş değer.", "is_unknown": False},
+        json={"corrected_value": "Güncellenmiş değer.", "is_unknown": False, **_same_evidence(claim)},
     )
+    assert r.status_code == 200, r.text
 
     r = await client.get(f"/extractions/{eid}/corrections", headers=issuer_headers)
     assert r.status_code == 200
@@ -327,8 +348,8 @@ async def test_list_approvals_after_approval(
     legal_headers: dict,
 ):
     """
-    İki farklı inceleyicinin onayından sonra liste endpoint'i her iki kaydı da döndürür.
-    Onay türleri birbirinden ayrışır.
+    After approvals by two different reviewers, the list endpoint returns both records.
+    The approval types are distinct from each other.
     """
     eid = created_extraction["id"]
 

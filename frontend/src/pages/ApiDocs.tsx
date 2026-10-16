@@ -32,16 +32,16 @@ export function ApiDocs() {
       <Section title="Authentication">
         <div className="space-y-4">
           <AuthCard
-            name="Reviewer Token"
+            name="User Token"
             header="Authorization: Bearer <token>"
-            description="Required for review workflow endpoints (start review, correct claims, approve). Internal reviewers only."
-            configuredIn="REVIEWER_ISSUER_TOKEN / REVIEWER_LEGAL_TOKEN"
+            description="Required for every internal endpoint except /health. The token's role (platform_admin, issuer_reviewer, independent_legal_reviewer) decides which operations are allowed, and its issuer scope decides which assets are visible; resources of other issuers return 404."
+            configuredIn="access_control.json (users[], SHA-256 token hashes only)"
           />
           <AuthCard
             name="Institutional API Key"
             header="X-API-Key: <key>"
-            description="Required for the public Legal Passport endpoint. Rate-limited to 60 requests/minute per key."
-            configuredIn="INSTITUTIONAL_API_KEY_ALPHA / INSTITUTIONAL_API_KEY_BETA"
+            description="Required for the Legal Passport endpoint only. Each key is scoped to permitted issuers/assets and operations (passport:read). Rate-limited to 60 requests/minute per key."
+            configuredIn="access_control.json (institutional_clients[], SHA-256 key hashes only)"
           />
         </div>
       </Section>
@@ -49,33 +49,35 @@ export function ApiDocs() {
       {/* Endpoint groups */}
       <Section title="Asset Registry">
         <EndpointTable endpoints={[
-          { method: 'GET', path: '/assets', auth: 'none', description: 'List all registered tokenized assets' },
-          { method: 'POST', path: '/assets', auth: 'none', description: 'Register a new tokenized asset' },
-          { method: 'GET', path: '/assets/{asset_id}', auth: 'none', description: 'Get asset details' },
-          { method: 'PATCH', path: '/assets/{asset_id}', auth: 'none', description: 'Update asset status or metadata' },
+          { method: 'GET', path: '/assets', auth: 'Bearer', description: 'List all registered tokenized assets' },
+          { method: 'POST', path: '/assets', auth: 'Bearer', description: 'Register a new tokenized asset' },
+          { method: 'GET', path: '/assets/{asset_id}', auth: 'Bearer', description: 'Get asset details' },
+          { method: 'PATCH', path: '/assets/{asset_id}', auth: 'Bearer', description: 'Update asset status or metadata' },
         ]} />
       </Section>
 
       <Section title="Document Management">
         <EndpointTable endpoints={[
-          { method: 'GET', path: '/assets/{asset_id}/documents', auth: 'none', description: 'List all documents for an asset' },
-          { method: 'POST', path: '/assets/{asset_id}/documents', auth: 'none', description: 'Upload a new legal document (multipart/form-data)' },
-          { method: 'GET', path: '/documents/{doc_id}/versions', auth: 'none', description: 'List all versions of a document' },
+          { method: 'GET', path: '/assets/{asset_id}/documents', auth: 'Bearer', description: 'List all documents for an asset' },
+          { method: 'POST', path: '/assets/{asset_id}/documents', auth: 'Bearer', description: 'Upload a new legal document (multipart/form-data)' },
+          { method: 'GET', path: '/documents/{doc_id}/versions', auth: 'Bearer', description: 'List all versions of a document' },
+          { method: 'GET', path: '/documents/{doc_id}/text', auth: 'Bearer', description: 'Page texts of the current version (names its version_id)' },
+          { method: 'GET', path: '/documents/{doc_id}/versions/{version_number}/text', auth: 'Bearer', description: 'Page texts of exactly one version; no fallback to another version; optional version_id must match (409 otherwise). Evidence material, not proof of legal validity' },
         ]} />
       </Section>
 
       <Section title="AI Extraction">
         <EndpointTable endpoints={[
-          { method: 'POST', path: '/documents/{doc_id}/extractions', auth: 'none', description: 'Trigger AI extraction on a document version' },
-          { method: 'GET', path: '/documents/{doc_id}/extractions', auth: 'none', description: 'List all extractions for a document' },
-          { method: 'GET', path: '/extractions/{extraction_id}', auth: 'none', description: 'Get extraction details with all claims' },
+          { method: 'POST', path: '/documents/{doc_id}/extractions', auth: 'Bearer', description: 'Trigger AI extraction on a document version' },
+          { method: 'GET', path: '/documents/{doc_id}/extractions', auth: 'Bearer', description: 'List all extractions for a document' },
+          { method: 'GET', path: '/extractions/{extraction_id}', auth: 'Bearer', description: 'Get extraction details with all claims' },
         ]} />
       </Section>
 
       <Section title="Review Workflow">
         <EndpointTable endpoints={[
           { method: 'POST', path: '/extractions/{extraction_id}/review', auth: 'Bearer', description: 'Start review — moves status to under_review' },
-          { method: 'PATCH', path: '/extractions/{extraction_id}/claims/{claim_id}', auth: 'Bearer', description: 'Correct a legal claim value' },
+          { method: 'PATCH', path: '/extractions/{extraction_id}/claims/{claim_id}', auth: 'Bearer', description: 'Correct a claim: an omitted page / quotation keeps the current one (unchanged value only), null clears it; a changed value needs both; the quotation must be found on its cited page (422 with correction_rule otherwise). Required expected_claim (value, is_unknown, source_page, supporting_passage exactly as read): 409 if the claim changed meanwhile, 422 if missing' },
           { method: 'POST', path: '/extractions/{extraction_id}/approvals', auth: 'Bearer', description: 'Approve extraction (moves to approved)' },
           { method: 'GET', path: '/extractions/{extraction_id}/corrections', auth: 'Bearer', description: 'List all corrections for an extraction' },
           { method: 'GET', path: '/extractions/{extraction_id}/approvals', auth: 'Bearer', description: 'List all approvals for an extraction' },
@@ -84,13 +86,13 @@ export function ApiDocs() {
 
       <Section title="Blockchain Status">
         <EndpointTable endpoints={[
-          { method: 'GET', path: '/assets/{asset_id}/blockchain-status', auth: 'none', description: 'Query Stellar Horizon for on-chain asset status' },
+          { method: 'GET', path: '/assets/{asset_id}/blockchain-status', auth: 'Bearer', description: 'Query Stellar Horizon for on-chain asset status' },
         ]} />
       </Section>
 
       <Section title="Legal Passport (Institutional)">
         <EndpointTable endpoints={[
-          { method: 'GET', path: '/passport/{network}/{asset_code}/{issuer_key}', auth: 'X-API-Key', description: 'Retrieve the public legal transparency passport for an approved asset' },
+          { method: 'GET', path: '/passport/{network}/{asset_code}/{issuer_key}', auth: 'X-API-Key', description: 'Retrieve the legal transparency passport built from current approvals only (409 if approvals are stale or the asset is not active)' },
         ]} />
       </Section>
 
@@ -129,7 +131,7 @@ const passport = await resp.json();`}
             code={`curl -X POST \\
   -H "Authorization: Bearer <your-reviewer-token>" \\
   -H "Content-Type: application/json" \\
-  -d '{"disclaimer": "INTERNAL REVIEW ONLY - NOT LEGAL ADVICE"}' \\
+  -d '{"notes": "Reviewed against version 1"}' \\
   "${base}/extractions/<extraction_id>/approvals"`}
           />
         </div>
@@ -152,10 +154,10 @@ const passport = await resp.json();`}
                 ['401', 'Invalid or missing credentials'],
                 ['403', 'Forbidden — missing Authorization header or insufficient role'],
                 ['404', 'Resource not found'],
-                ['409', 'Conflict — e.g. extraction already approved'],
-                ['422', 'Validation error — check request body'],
+                ['409', 'Conflict — e.g. extraction already approved, superseded document version, version reference mismatch, unavailable source text, or no current approval (passport)'],
+                ['422', 'Validation error or refused evidence — check the request body; corrections and approvals name the failing rule or claims'],
                 ['429', 'Rate limit exceeded (60 req/min per API key)'],
-                ['503', 'Stellar Horizon network error'],
+                ['503', 'Service temporarily unavailable — e.g. Stellar Horizon or the AI service unreachable, or the database busy; retry later'],
               ].map(([code, meaning]) => (
                 <tr key={code}>
                   <td className="px-4 py-3 font-mono font-semibold text-slate-900">{code}</td>
@@ -188,7 +190,7 @@ function AuthCard({ name, header, description, configuredIn }: {
       <code className="mt-1 block font-mono text-xs text-indigo-700">{header}</code>
       <p className="mt-2 text-sm text-slate-600">{description}</p>
       <p className="mt-2 text-xs text-slate-400">
-        Configured in the backend <span className="font-mono">.env</span> file: <span className="font-mono">{configuredIn}</span>
+        Configured on the backend in <span className="font-mono">{configuredIn}</span> (path set by <span className="font-mono">ACCESS_CONTROL_FILE</span>)
       </p>
     </div>
   )

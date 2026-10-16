@@ -1,18 +1,18 @@
 """
-Phase 7 — Kurumsal Yasal Pasaport entegrasyon ve güvenlik testleri (11 test).
+Phase 7 — Institutional Legal Passport integration and security tests (11 tests).
 
-Kapsam:
- 1. Kimlik doğrulama — API anahtarı eksik veya geçersiz
- 2. Varlık bulunamadı — 404
- 3. Onaylı çıkarım yok — 404 (taslak gizli kalır)
- 4. Taslak bilgi hiç gösterilmez
- 5. Tüm 7 yasal alan döner, doğrulama durumu doğru
- 6. Bilinmeyen alanlar açıkça etiketlenir
- 7. Onay meta verisi yanıtta bulunur
- 8. Disclaimer her yanıtta zorunlu
- 9. Hız sınırı aşıldığında 429 döner
-10. Pasaport isteği günlük kaydına işlenir
-11. Kaynak belge PDF'i bu endpoint üzerinden indirilemez (link içermez)
+Coverage:
+ 1. Authentication — API key missing or invalid
+ 2. Asset not found — 404
+ 3. No approved extraction — 404 (the draft stays hidden)
+ 4. Draft information is never shown
+ 5. All 7 legal fields are returned with the correct verification status
+ 6. Unknown fields are labeled explicitly
+ 7. Approval metadata is present in the response
+ 8. Disclaimer mandatory in every response
+ 9. 429 is returned when the rate limit is exceeded
+10. The passport request is written to the log
+11. The source document PDF cannot be downloaded through this endpoint (no link)
 """
 
 import logging
@@ -25,7 +25,7 @@ from app.rate_limit import InMemoryRateLimiter, get_rate_limiter
 
 
 def _passport_url(asset: dict) -> str:
-    """Varlık verisinden pasaport URL'i oluşturur."""
+    """Builds the passport URL from the asset data."""
     return (
         f"/passport/{asset['blockchain_network']}"
         f"/{asset['stellar_asset_code']}"
@@ -33,13 +33,13 @@ def _passport_url(asset: dict) -> str:
     )
 
 
-# ── 1–2. Kimlik doğrulama ─────────────────────────────────────────────────────
+# ── 1–2. Authentication ───────────────────────────────────────────────────────
 
 
 async def test_passport_no_api_key_returns_403(
     client: AsyncClient, approved_extraction: dict, created_asset: dict
 ):
-    """X-API-Key başlığı olmadan 403 Forbidden döner."""
+    """Without the X-API-Key header, 403 Forbidden is returned."""
     r = await client.get(_passport_url(created_asset))
     assert r.status_code == 403
 
@@ -47,20 +47,20 @@ async def test_passport_no_api_key_returns_403(
 async def test_passport_invalid_api_key_returns_401(
     client: AsyncClient, approved_extraction: dict, created_asset: dict
 ):
-    """Geçersiz API anahtarı ile 401 Unauthorized döner."""
+    """With an invalid API key, 401 Unauthorized is returned."""
     r = await client.get(
         _passport_url(created_asset), headers={"X-API-Key": "yanlis-anahtar"}
     )
     assert r.status_code == 401
 
 
-# ── 3. Varlık bulunamadı ──────────────────────────────────────────────────────
+# ── 3. Asset not found ────────────────────────────────────────────────────────
 
 
 async def test_passport_unknown_asset_returns_404(
     client: AsyncClient, inst_headers: dict
 ):
-    """Stellar ağında tanımlı olmayan varlık → 404 Not Found."""
+    """An asset that is not defined on the Stellar network → 404 Not Found."""
     r = await client.get(
         "/passport/stellar-testnet/GHOST/GDQOE23CFSUMSVQK4Y5JHPPYK73VYCNHZHA7ENKCV37P6SUEO6XQBKPP",
         headers=inst_headers,
@@ -68,23 +68,23 @@ async def test_passport_unknown_asset_returns_404(
     assert r.status_code == 404
 
 
-# ── 4. Taslak bilgi gizli kalır ───────────────────────────────────────────────
+# ── 4. Draft information stays hidden ─────────────────────────────────────────
 
 
 async def test_passport_draft_extraction_returns_404(
     client: AsyncClient, created_extraction: dict, created_asset: dict, inst_headers: dict
 ):
     """
-    Çıkarım onaylanmadan pasaport isteği 404 döner.
-    Taslak bilgi hiçbir zaman dış API üzerinden gösterilmez.
+    Before the extraction is approved, the passport request returns 404.
+    Draft information is never shown through the external API.
     """
-    # created_extraction var (taslak) ama approved_extraction yok
+    # created_extraction exists (draft) but there is no approved_extraction
     r = await client.get(_passport_url(created_asset), headers=inst_headers)
     assert r.status_code == 404
-    assert "onaylanmış" in r.json()["detail"].lower()
+    assert "approved" in r.json()["detail"].lower()
 
 
-# ── 5. Tüm yasal alanlar döner ────────────────────────────────────────────────
+# ── 5. All legal fields are returned ──────────────────────────────────────────
 
 
 async def test_passport_returns_all_seven_legal_rights(
@@ -94,8 +94,8 @@ async def test_passport_returns_all_seven_legal_rights(
     inst_headers: dict,
 ):
     """
-    Onaylı pasaport tüm 7 yasal alanı içerir.
-    Mock AI 4 bilinen + 3 bilinmeyen alan çıkarır.
+    The approved passport contains all 7 legal fields.
+    The mock AI extracts 4 known + 3 unknown fields.
     """
     r = await client.get(_passport_url(created_asset), headers=inst_headers)
     assert r.status_code == 200
@@ -119,7 +119,7 @@ async def test_passport_returns_all_seven_legal_rights(
     }
 
 
-# ── 6. Bilinmeyen alanlar açıkça etiketlenir ─────────────────────────────────
+# ── 6. Unknown fields are labeled explicitly ─────────────────────────────────
 
 
 async def test_passport_unknown_fields_clearly_labeled(
@@ -129,11 +129,11 @@ async def test_passport_unknown_fields_clearly_labeled(
     inst_headers: dict,
 ):
     """
-    is_unknown=True olan alanlarda:
+    For fields with is_unknown=True:
     - value == "unknown"
     - verified == False
     - supporting_passage == None
-    is_unknown=False olan alanlarda verified==True (kaynak kanıtı var).
+    For fields with is_unknown=False, verified==True (source evidence present).
     """
     r = await client.get(_passport_url(created_asset), headers=inst_headers)
     assert r.status_code == 200
@@ -154,7 +154,7 @@ async def test_passport_unknown_fields_clearly_labeled(
         assert k["supporting_passage"] is not None
 
 
-# ── 7. Onay meta verisi yanıtta bulunur ───────────────────────────────────────
+# ── 7. Approval metadata is present in the response ───────────────────────────
 
 
 async def test_passport_includes_approval_metadata(
@@ -164,10 +164,10 @@ async def test_passport_includes_approval_metadata(
     inst_headers: dict,
 ):
     """
-    Pasaport yanıtı:
-    - approvals listesi dolu (en az 1 onay)
+    The passport response:
+    - approvals list populated (at least 1 approval)
     - extraction_metadata: passport_version, effective_date, ai_model
-    - source_document: belge başlığı ve versiyon numarası
+    - source_document: document title and version number
     """
     r = await client.get(_passport_url(created_asset), headers=inst_headers)
     assert r.status_code == 200
@@ -188,7 +188,7 @@ async def test_passport_includes_approval_metadata(
     assert doc_ref["version_number"] == 1
 
 
-# ── 8. Disclaimer her yanıtta zorunlu ─────────────────────────────────────────
+# ── 8. Disclaimer mandatory in every response ─────────────────────────────────
 
 
 async def test_passport_disclaimer_always_present(
@@ -198,19 +198,19 @@ async def test_passport_disclaimer_always_present(
     inst_headers: dict,
 ):
     """
-    Disclaimer alanı her pasaport yanıtında mevcuttur ve
-    hukuki bağlayıcılık olmadığını açıkça belirtir.
+    The disclaimer field is present in every passport response and
+    states explicitly that it is not legally binding.
     """
     r = await client.get(_passport_url(created_asset), headers=inst_headers)
     assert r.status_code == 200
     body = r.json()
     disclaimer = body["disclaimer"]
     assert disclaimer
-    # Yasal tavsiye olmadığını belirten anahtar ifade
+    # Key phrase stating that this is not legal advice
     assert "legal advice" in disclaimer.lower() or "legal counsel" in disclaimer.lower()
 
 
-# ── 9. Hız sınırı aşıldığında 429 döner ──────────────────────────────────────
+# ── 9. 429 is returned when the rate limit is exceeded ───────────────────────
 
 
 async def test_passport_rate_limit_exceeded_returns_429(
@@ -220,7 +220,7 @@ async def test_passport_rate_limit_exceeded_returns_429(
     inst_headers: dict,
 ):
     """
-    Düşük limitli hız sınırlayıcı ile sınır aşıldığında 429 Too Many Requests döner.
+    With a low-limit rate limiter, 429 Too Many Requests is returned once the limit is exceeded.
     """
     low_limiter = InMemoryRateLimiter(max_requests=2, window_seconds=60)
     app.dependency_overrides[get_rate_limiter] = lambda: low_limiter
@@ -230,12 +230,12 @@ async def test_passport_rate_limit_exceeded_returns_429(
     assert r1.status_code == 200
     r2 = await client.get(url, headers=inst_headers)
     assert r2.status_code == 200
-    # Üçüncü istek sınırı aşıyor
+    # The third request exceeds the limit
     r3 = await client.get(url, headers=inst_headers)
     assert r3.status_code == 429
 
 
-# ── 10. Pasaport isteği günlük kaydına işlenir ────────────────────────────────
+# ── 10. The passport request is written to the log ────────────────────────────
 
 
 async def test_passport_request_is_logged(
@@ -246,19 +246,19 @@ async def test_passport_request_is_logged(
     caplog,
 ):
     """
-    Başarılı pasaport isteği 'rwa_passport' logger'ına INFO kaydı bırakır.
-    Kayıt istemci kimliğini ve varlık kodunu içerir.
+    A successful passport request leaves an INFO record in the 'rwa_passport' logger.
+    The record contains the client ID and the asset code.
     """
     with caplog.at_level(logging.INFO, logger="rwa_passport"):
         r = await client.get(_passport_url(created_asset), headers=inst_headers)
 
     assert r.status_code == 200
     log_messages = [record.message for record in caplog.records]
-    # En az bir kayıtta client_id geçmeli
+    # client_id must appear in at least one record
     assert any("meridian-capital-001" in msg for msg in log_messages)
 
 
-# ── 11. PDF içeriği bu endpoint üzerinden indirilemez ────────────────────────
+# ── 11. PDF content cannot be downloaded through this endpoint ───────────────
 
 
 async def test_passport_does_not_expose_document_download_url(
@@ -268,15 +268,15 @@ async def test_passport_does_not_expose_document_download_url(
     inst_headers: dict,
 ):
     """
-    Pasaport yanıtı yalnızca belge meta verisini (başlık, tür, versiyon) içerir.
-    Ham PDF içeriği, indirme bağlantısı veya belge metni gösterilmez.
+    The passport response contains only document metadata (title, type, version).
+    Raw PDF content, a download link or the document text are not shown.
     """
     r = await client.get(_passport_url(created_asset), headers=inst_headers)
     assert r.status_code == 200
     body = r.json()
 
     doc_ref = body["source_document"]
-    # Yalnızca meta veri alanları — indirme bağlantısı veya içerik yok
+    # Metadata fields only — no download link or content
     assert set(doc_ref.keys()) == {"document_id", "title", "document_type", "version_number"}
     assert "download_url" not in doc_ref
     assert "content" not in doc_ref

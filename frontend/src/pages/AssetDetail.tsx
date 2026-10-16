@@ -12,7 +12,7 @@ import {
 import type { Asset, BlockchainStatus, Document, DocumentType, LegalExtraction } from '../types'
 import { PageSpinner } from '../components/Spinner'
 import { DisclaimerBanner } from '../components/DisclaimerBanner'
-import { ExtractionStatusBadge } from '../components/StatusBadge'
+import { ApprovalStateBadge, ExtractionStatusBadge } from '../components/StatusBadge'
 
 type Tab = 'documents' | 'blockchain'
 
@@ -180,7 +180,10 @@ function DocumentsTab({ asset }: { asset: Asset }) {
                       <span>•</span>
                       <span>{fmt(doc.created_at)}</span>
                     </div>
-                    <p className="mt-1 font-mono text-xs text-slate-400">{doc.sha256_hash.slice(0, 16)}…</p>
+                    {/* The hash belongs to a version; list responses carry no current_version */}
+                    {doc.current_version?.sha256_hash && (
+                      <p className="mt-1 font-mono text-xs text-slate-400">{doc.current_version.sha256_hash.slice(0, 16)}…</p>
+                    )}
                   </div>
                   <button
                     onClick={() => handleTriggerExtraction(doc.id)}
@@ -205,6 +208,7 @@ function DocumentsTab({ asset }: { asset: Asset }) {
                       >
                         <div className="flex items-center gap-3">
                           <ExtractionStatusBadge status={ex.status} />
+                          <ApprovalStateBadge state={ex.approval_state?.state} />
                           <span className="text-xs text-slate-500">{fmt(ex.created_at)}</span>
                           <span className="font-mono text-xs text-slate-400">{ex.ai_model}</span>
                         </div>
@@ -280,7 +284,7 @@ function BlockchainTab({ asset }: { asset: Asset }) {
             </div>
             <div>
               <dt className="text-xs font-medium text-slate-500">Accounts</dt>
-              <dd className="mt-1 text-sm font-semibold text-slate-900">{status.record.num_accounts.toLocaleString()}</dd>
+              <dd className="mt-1 text-sm font-semibold text-slate-900">{status.record.num_accounts.toLocaleString('en-US')}</dd>
             </div>
             <div>
               <dt className="text-xs font-medium text-slate-500">Total Supply</dt>

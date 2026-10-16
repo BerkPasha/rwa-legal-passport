@@ -6,6 +6,7 @@ import type {
   CreateAssetPayload,
   Document,
   DocumentVersion,
+  DocumentVersionText,
   LegalExtraction,
   LegalPassport,
   ReviewApproval,
@@ -15,23 +16,60 @@ import type {
 
 export const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
+// ── Credentials ───────────────────────────────────────────────────────────────
+// Every internal endpoint requires the user's Bearer token. AuthProvider keeps
+// this in sync; it is attached to internal requests only — never to the
+// institutional passport endpoint, which authenticates with X-API-Key.
+
+let userToken = ''
+
+export function setUserToken(token: string): void {
+  userToken = token.trim()
+}
+
+type Auth = 'user' | 'none'
+
 // ── Error handling ────────────────────────────────────────────────────────────
 
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) {
+  // body: the parsed JSON error body, kept for structured fields such as correction_rule,
+  // evidence_status, evidence_failures or source_text_unavailable_reason (Stage 9B-4)
+  constructor(public readonly status: number, message: string, public readonly body: unknown = null) {
     super(message)
     this.name = 'ApiError'
   }
+
+  // A string field of the error body, or undefined
+  field(name: string): string | undefined {
+    const value = (this.body as Record<string, unknown> | null)?.[name]
+    return typeof value === 'string' ? value : undefined
+  }
+}
+
+// FastAPI validation errors carry a list of {loc, msg}; anything else is shown as is
+function detailMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const parts = detail.map(item => {
+      const { loc, msg } = (item ?? {}) as { loc?: unknown; msg?: unknown }
+      const where = Array.isArray(loc) ? loc.filter(p => p !== 'body').join('.') : ''
+      return typeof msg === 'string' ? (where ? `${where}: ${msg}` : msg) : ''
+    }).filter(Boolean)
+    if (parts.length > 0) return `Invalid request — ${parts.join('; ')}`
+  }
+  return fallback
 }
 
 async function request<T>(
   path: string,
   init: RequestInit = {},
   extraHeaders: Record<string, string> = {},
+  auth: Auth = 'user',
 ): Promise<T> {
   const isFormData = init.body instanceof FormData
   const headers: Record<string, string> = {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+    ...(auth === 'user' && userToken ? { Authorization: `Bearer ${userToken}` } : {}),
     ...extraHeaders,
   }
 
@@ -42,11 +80,12 @@ async function request<T>(
 
   if (!res.ok) {
     let detail = res.statusText
+    let body: unknown = null
     try {
-      const body = await res.json()
-      detail = body.detail ?? detail
+      body = await res.json()
+      detail = detailMessage((body as { detail?: unknown } | null)?.detail, detail)
     } catch { /* ignore */ }
-    throw new ApiError(res.status, detail)
+    throw new ApiError(res.status, detail, body)
   }
 
   if (res.status === 204) return undefined as T
@@ -82,7 +121,18 @@ export const uploadDocument = (
   request(`/assets/${assetId}/documents`, { method: 'POST', body: formData })
 
 export const getDocumentVersions = (docId: string): Promise<DocumentVersion[]> =>
-  request(`/documents/${docId}/versions`)
+  request(`/documents/${encodeURIComponent(docId)}/versions`)
+
+// Text of exactly one version (Stage 9B-4, step 8). The backend never falls back to another
+// version; versionId, when given, must identify that same version (otherwise 409).
+export const getDocumentVersionText = (
+  docId: string,
+  versionNumber: number,
+  versionId?: string,
+): Promise<DocumentVersionText> => {
+  const query = versionId ? `?version_id=${encodeURIComponent(versionId)}` : ''
+  return request(`/documents/${encodeURIComponent(docId)}/versions/${versionNumber}/text${query}`)
+}
 
 // ── Extractions ───────────────────────────────────────────────────────────────
 
@@ -159,4 +209,4 @@ export const getLegalPassport = (
 ): Promise<LegalPassport> =>
   request(`/passport/${network}/${assetCode}/${issuerKey}`, {}, {
     'X-API-Key': apiKey,
-  })
+  }, 'none')

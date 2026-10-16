@@ -42,7 +42,7 @@ const nav = [
 ]
 
 function CredentialsPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { reviewerToken, apiKey, setReviewerToken, setApiKey } = useAuth()
+  const { userToken, apiKey, setUserToken, setApiKey } = useAuth()
   if (!open) return null
   return (
     <div className="absolute bottom-16 left-0 right-0 mx-3 rounded-lg bg-slate-800 p-4 shadow-xl ring-1 ring-white/10">
@@ -54,12 +54,13 @@ function CredentialsPanel({ open, onClose }: { open: boolean; onClose: () => voi
           </svg>
         </button>
       </div>
-      <label className="mb-1 block text-xs text-slate-400">Reviewer Token</label>
+      <label className="mb-1 block text-xs text-slate-400">User Token (Bearer)</label>
       <input
         type="password"
-        value={reviewerToken}
-        onChange={e => setReviewerToken(e.target.value)}
+        value={userToken}
+        onChange={e => setUserToken(e.target.value)}
         placeholder="Bearer token…"
+        autoComplete="off"
         className="mb-3 w-full rounded bg-slate-700 px-3 py-1.5 text-xs text-white placeholder-slate-500 outline-none ring-1 ring-slate-600 focus:ring-indigo-500"
       />
       <label className="mb-1 block text-xs text-slate-400">Institutional API Key</label>
@@ -68,6 +69,7 @@ function CredentialsPanel({ open, onClose }: { open: boolean; onClose: () => voi
         value={apiKey}
         onChange={e => setApiKey(e.target.value)}
         placeholder="X-API-Key…"
+        autoComplete="off"
         className="w-full rounded bg-slate-700 px-3 py-1.5 text-xs text-white placeholder-slate-500 outline-none ring-1 ring-slate-600 focus:ring-indigo-500"
       />
     </div>
@@ -77,8 +79,8 @@ function CredentialsPanel({ open, onClose }: { open: boolean; onClose: () => voi
 export function Layout() {
   const location = useLocation()
   const [credOpen, setCredOpen] = useState(false)
-  const { reviewerToken, apiKey } = useAuth()
-  const hasCredentials = reviewerToken || apiKey
+  const { userToken, apiKey } = useAuth()
+  const hasCredentials = userToken || apiKey
 
   const title = (() => {
     const p = location.pathname

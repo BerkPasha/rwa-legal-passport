@@ -1,13 +1,13 @@
 """
-AI yasal hak çıkarım modelleri.
+AI legal-rights extraction models.
 
-LegalExtraction  — Bir belge versiyonuna ait tek çıkarım çalışması
-LegalClaim       — Çıkarılan her yasal hak alanı için bir kayıt
+LegalExtraction  — A single extraction run for one document version
+LegalClaim       — One record for each extracted legal-rights field
 
-Kritik tasarım kararları:
-- status her zaman "draft" olarak başlar; otomatik onay yoktur.
-- Veriler, onaylanmış kayıtlardan (Asset, Document) ayrı tablolarda tutulur.
-- Silme veya güncelleme endpoint'i yoktur; geçmiş korunur.
+Critical design decisions:
+- status always starts as "draft"; there is no automatic approval.
+- The data is kept in tables separate from the approved records (Asset, Document).
+- There is no delete or update endpoint; the history is preserved.
 """
 
 import uuid
@@ -31,10 +31,10 @@ class LegalExtraction(Base):
     version_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("document_versions.id"), nullable=False
     )
-    # Yalnızca "draft" — otomatik onay uygulanmaz
+    # "draft" only — automatic approval is never applied
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
     ai_model: Mapped[str] = mapped_column(String(100), nullable=False)
-    # Yanıtta her zaman görünen sorumluluk reddi metni
+    # Disclaimer text that is always shown in the response
     disclaimer: Mapped[str] = mapped_column(Text, nullable=False)
     extraction_timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -56,10 +56,10 @@ class LegalClaim(Base):
         String(36), ForeignKey("legal_extractions.id"), nullable=False, index=True
     )
     field_name: Mapped[str] = mapped_column(String(50), nullable=False)
-    # Kanıt yetersizse "unknown" saklanır; asla uydurulmaz
+    # If evidence is insufficient, "unknown" is stored; values are never fabricated
     value: Mapped[str] = mapped_column(Text, nullable=False)
     is_unknown: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # Kaynak referansları — kanıt iz kaydı
+    # Source references — evidence audit trail
     source_page: Mapped[int] = mapped_column(Integer, nullable=True)
     supporting_passage: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

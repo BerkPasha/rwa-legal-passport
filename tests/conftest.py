@@ -1,11 +1,18 @@
 """
 Test fixtures.
 
-Her test için:
-- Ayrı in-memory SQLite veritabanı (tam izolasyon)
-- Ayrı geçici klasör (dosya depolama izolasyonu)
-- Mock AI servisi (Anthropic API'ye gerçek istek gönderilmez)
-- Kurgusal test token'ları / API anahtarları (.env'deki gerçek değerler kullanılmaz)
+For every test:
+- A separate in-memory SQLite database (full isolation)
+- A separate temporary folder (file storage isolation)
+- A mock AI service (no real request is sent to the Anthropic API)
+- A fictional access registry: two issuers (tenants), users of every role and
+  scoped institutional keys. The registry goes through the application's own
+  validator (AccessRegistry.from_dict); tokens are kept only as digests.
+  Real values from .env or access_control.json are not used.
+
+The standard document (created_document) is a two-page text PDF containing every quotation of
+the mock AI, so approvals of its extractions pass the source-evidence gate (Stage 9B-4).
+minimal_pdf stays a blank, scanned-like PDF on which no quotation can ever be verified.
 """
 
 import io
@@ -14,23 +21,29 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.api_keys import InstitutionalClient, get_client_registry
-from app.auth import ReviewerInfo, get_reviewer_registry
+from app.access_registry import AccessRegistry, get_access_registry, hash_token
 from app.db.base import Base
 from app.db.session import get_db
-from app.enums import ReviewerRole
 from app.main import app
-from app.rate_limit import InMemoryRateLimiter, get_rate_limiter
+from app.rate_limit import InMemoryRateLimiter, get_extraction_rate_limiter, get_rate_limiter
 from app.services.ai import get_ai_service
 from app.services.stellar import get_stellar_service
 from app.services.storage import StorageService, get_storage
 from tests.mock_ai import MockAIService
 from tests.mock_stellar import MockStellarService
+from tests.pdf_fixtures import make_source_pdf
 
 _TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
-# Phase 2 ve Phase 3 testlerinde kullanılan kurgusal varlık
+# ── Fictional issuers (tenants) ───────────────────────────────────────────────
+MERIDIAN_ISSUER = "meridian-property"
+HARBOR_ISSUER = "harbor-bonds"
+AGROCOMM_ISSUER = "agrocomm-finance"
+TESTNET_ISSUER = "testnet-property"
+
+# Fictional asset used in the Phase 2 and Phase 3 tests
 _MERIDIAN_ASSET = {
+    "issuer_id": MERIDIAN_ISSUER,
     "blockchain_network": "stellar-mainnet",
     "stellar_asset_code": "MRPROP",
     "stellar_issuer_public_key": "GCEZFBCKNOXYELQZFQ7JKPWQABYOPZKVIPQLNOILMWMEXGWAF7RQJCUQ",
@@ -39,45 +52,90 @@ _MERIDIAN_ASSET = {
     "jurisdiction": "US-NY",
 }
 
-# ── KURGUSAL TEST KİMLİK BİLGİLERİ — GİZLİ DEĞİLDİR ───────────────────────────
-# Yalnızca bu test paketinde, bağımlılık geçersiz kılma ile geçerlidir.
-# Çalışan uygulama bunları tanımaz; gerçek değerler yalnızca .env dosyasındadır.
-_TEST_REVIEWERS: dict[str, ReviewerInfo] = {
-    "test-issuer-token": ReviewerInfo(
-        user_id="alice-chen-01",
-        display_name="Alice Chen",
-        role=ReviewerRole.issuer_reviewer,
-    ),
-    "test-legal-token": ReviewerInfo(
-        user_id="bob-martinez-01",
-        display_name="Bob Martinez",
-        role=ReviewerRole.independent_legal_reviewer,
-    ),
-    # Kod katmanı testine özgü: user_id "ai-" ile başlıyor → onay 403 ile reddedilir
-    "test-ai-token": ReviewerInfo(
-        user_id="ai-extraction-service",
-        display_name="AI Extraction Service",
-        role=ReviewerRole.issuer_reviewer,
-    ),
+# Fictional asset of the second tenant (cross-tenant tests)
+_HARBOR_ASSET = {
+    "issuer_id": HARBOR_ISSUER,
+    "blockchain_network": "stellar-mainnet",
+    "stellar_asset_code": "HBBOND",
+    "stellar_issuer_public_key": "GBVERHXLKQNF5ZPAW7MXJTDYRVCSUIQENBAHAGKFZ3PLMWT2YDRUQQXY",
+    "issuer_organization_name": "Harbor Municipal Bonds Ltd",
+    "asset_type": "bond",
+    "jurisdiction": "GB",
 }
 
-_TEST_INSTITUTIONAL_CLIENTS: dict[str, InstitutionalClient] = {
-    "test-inst-key-alpha": InstitutionalClient(
-        client_id="meridian-capital-001",
-        organization="Meridian Capital Partners",
-        tier="read",
-    ),
-    "test-inst-key-beta": InstitutionalClient(
-        client_id="apex-legal-research-001",
-        organization="Apex Legal Research Inc.",
-        tier="read",
-    ),
-}
+# ── FICTIONAL TEST CREDENTIALS — NOT SECRET ───────────────────────────────────
+# Valid only within this test suite, through dependency overrides.
+# The running application does not recognize them; the real registry is in access_control.json.
+ADMIN_TOKEN = "test-admin-token"
+ISSUER_TOKEN = "test-issuer-token"
+LEGAL_TOKEN = "test-legal-token"
+AI_TOKEN = "test-ai-token"
+OTHER_ISSUER_TOKEN = "test-other-issuer-token"
+OTHER_LEGAL_TOKEN = "test-other-legal-token"
+DISABLED_TOKEN = "test-disabled-token"
+
+INST_KEY_ALPHA = "test-inst-key-alpha"   # Meridian issuer, passport:read
+INST_KEY_BETA = "test-inst-key-beta"     # Harbor issuer, passport:read
+INST_KEY_DISABLED = "test-inst-key-off"  # Meridian scope, disabled (revoked)
+
+
+def build_test_access_config(extra_clients: list[dict] | None = None) -> dict:
+    """Access configuration dictionary (same schema as access_control.json)."""
+    return {
+        "issuers": [
+            {"id": MERIDIAN_ISSUER, "name": "Meridian Property Holdings LLC"},
+            {"id": HARBOR_ISSUER, "name": "Harbor Municipal Bonds Ltd"},
+            {"id": AGROCOMM_ISSUER, "name": "AgroComm Finance SA"},
+            {"id": TESTNET_ISSUER, "name": "Testnet Property Fund"},
+        ],
+        "users": [
+            {"user_id": "ops-admin-01", "display_name": "Platform Operator",
+             "role": "platform_admin", "token_sha256": hash_token(ADMIN_TOKEN)},
+            {"user_id": "alice-chen-01", "display_name": "Alice Chen",
+             "role": "issuer_reviewer", "issuer_ids": [MERIDIAN_ISSUER, TESTNET_ISSUER],
+             "token_sha256": hash_token(ISSUER_TOKEN)},
+            {"user_id": "bob-martinez-01", "display_name": "Bob Martinez",
+             "role": "independent_legal_reviewer", "issuer_ids": [MERIDIAN_ISSUER],
+             "token_sha256": hash_token(LEGAL_TOKEN)},
+            # Specific to the code-layer test: user_id starts with "ai-" → approval is rejected with 403
+            {"user_id": "ai-extraction-service", "display_name": "AI Extraction Service",
+             "role": "issuer_reviewer", "issuer_ids": [MERIDIAN_ISSUER],
+             "token_sha256": hash_token(AI_TOKEN)},
+            {"user_id": "carol-ng-01", "display_name": "Carol Ng",
+             "role": "issuer_reviewer", "issuer_ids": [HARBOR_ISSUER],
+             "token_sha256": hash_token(OTHER_ISSUER_TOKEN)},
+            {"user_id": "dave-okafor-01", "display_name": "Dave Okafor",
+             "role": "independent_legal_reviewer", "issuer_ids": [HARBOR_ISSUER],
+             "token_sha256": hash_token(OTHER_LEGAL_TOKEN)},
+            {"user_id": "erin-former-01", "display_name": "Erin (revoked)",
+             "role": "issuer_reviewer", "issuer_ids": [MERIDIAN_ISSUER],
+             "token_sha256": hash_token(DISABLED_TOKEN), "enabled": False},
+        ],
+        "institutional_clients": [
+            {"client_id": "meridian-capital-001", "organization": "Meridian Capital Partners",
+             "key_sha256": hash_token(INST_KEY_ALPHA), "issuer_ids": [MERIDIAN_ISSUER],
+             "operations": ["passport:read"]},
+            {"client_id": "apex-legal-research-001", "organization": "Apex Legal Research Inc.",
+             "key_sha256": hash_token(INST_KEY_BETA), "issuer_ids": [HARBOR_ISSUER],
+             "operations": ["passport:read"]},
+            {"client_id": "revoked-fund-001", "organization": "Revoked Fund",
+             "key_sha256": hash_token(INST_KEY_DISABLED), "issuer_ids": [MERIDIAN_ISSUER],
+             "operations": ["passport:read"], "enabled": False},
+            *(extra_clients or []),
+        ],
+    }
+
+
+TEST_REGISTRY = AccessRegistry.from_dict(build_test_access_config())
+
+
+def bearer(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
 async def async_db() -> AsyncSession:
-    """Her test için taze bir in-memory SQLite DB ve session döndürür."""
+    """Returns a fresh in-memory SQLite DB and session for every test."""
     engine = create_async_engine(_TEST_DB_URL, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -92,11 +150,13 @@ async def async_db() -> AsyncSession:
 @pytest.fixture
 async def client(async_db: AsyncSession, tmp_path) -> AsyncClient:
     """
-    Tüm bağımlılıkları test versiyonlarıyla değiştirmiş HTTP istemcisi:
+    HTTP client that sends NO credentials; every dependency uses its test version:
     - get_db   → in-memory SQLite
-    - get_storage → geçici klasör
-    - get_ai_service → MockAIService (API çağrısı yok)
-    - get_reviewer_registry / get_client_registry → kurgusal test kimlik bilgileri
+    - get_storage → temporary folder
+    - get_ai_service → MockAIService (no API call)
+    - get_access_registry → fictional test access registry
+    Calls that need credentials use the header fixtures (e.g. issuer_headers)
+    or the role clients (e.g. admin_client).
     """
     storage_svc = StorageService(str(tmp_path / "storage"))
 
@@ -112,19 +172,17 @@ async def client(async_db: AsyncSession, tmp_path) -> AsyncClient:
     def _override_get_stellar_service():
         return MockStellarService(scenario="found")
 
-    # Rate limiter: her test için taze yüksek limitli örnek (normal testler sınıra çarpmaz)
+    # Rate limiters: a fresh high-limit instance for every test
     test_limiter = InMemoryRateLimiter(max_requests=1000, window_seconds=60)
-
-    def _override_get_rate_limiter():
-        return test_limiter
+    test_extraction_limiter = InMemoryRateLimiter(max_requests=1000, window_seconds=3600)
 
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_storage] = _override_get_storage
     app.dependency_overrides[get_ai_service] = _override_get_ai_service
     app.dependency_overrides[get_stellar_service] = _override_get_stellar_service
-    app.dependency_overrides[get_rate_limiter] = _override_get_rate_limiter
-    app.dependency_overrides[get_reviewer_registry] = lambda: _TEST_REVIEWERS
-    app.dependency_overrides[get_client_registry] = lambda: _TEST_INSTITUTIONAL_CLIENTS
+    app.dependency_overrides[get_rate_limiter] = lambda: test_limiter
+    app.dependency_overrides[get_extraction_rate_limiter] = lambda: test_extraction_limiter
+    app.dependency_overrides[get_access_registry] = lambda: TEST_REGISTRY
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -134,19 +192,40 @@ async def client(async_db: AsyncSession, tmp_path) -> AsyncClient:
     app.dependency_overrides.clear()
 
 
+async def _role_client(token: str):
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers=bearer(token)
+    ) as ac:
+        yield ac
+
+
 @pytest.fixture
-async def created_asset(client: AsyncClient) -> dict:
-    """Kurgusal bir varlık kaydı oluşturur."""
-    resp = await client.post("/assets", json=_MERIDIAN_ASSET)
-    assert resp.status_code == 201, f"Varlık oluşturulamadı: {resp.text}"
+async def admin_client(client: AsyncClient) -> AsyncClient:
+    """Client that sends requests as platform_admin (global scope)."""
+    async for ac in _role_client(ADMIN_TOKEN):
+        yield ac
+
+
+@pytest.fixture
+async def issuer_client(client: AsyncClient) -> AsyncClient:
+    """Client that sends requests as the Meridian issuer reviewer (Alice Chen)."""
+    async for ac in _role_client(ISSUER_TOKEN):
+        yield ac
+
+
+@pytest.fixture
+async def created_asset(admin_client: AsyncClient) -> dict:
+    """Fictional asset registered to the Meridian issuer by the platform operator."""
+    resp = await admin_client.post("/assets", json=_MERIDIAN_ASSET)
+    assert resp.status_code == 201, f"Asset could not be created: {resp.text}"
     return resp.json()
 
 
 @pytest.fixture
 def minimal_pdf() -> bytes:
     """
-    pypdf ile oluşturulmuş geçerli, tek sayfalık boş bir PDF.
-    Metin içermez — taramalı belgeler gibi davranır.
+    A valid, single-page blank PDF created with pypdf.
+    Contains no text — behaves like a scanned document.
     """
     from pypdf import PdfWriter
 
@@ -158,43 +237,69 @@ def minimal_pdf() -> bytes:
 
 
 @pytest.fixture
-async def created_document(client: AsyncClient, created_asset: dict, minimal_pdf: bytes) -> dict:
-    """Kurgusal bir belge yükler ve meta verilerini döndürür."""
+def source_pdf() -> bytes:
+    """Two-page text PDF (tests/mock_ai.py MOCK_SOURCE_PAGES): the mock AI quotations verify."""
+    return make_source_pdf()
+
+
+@pytest.fixture
+async def created_document(
+    issuer_client: AsyncClient, created_asset: dict, source_pdf: bytes
+) -> dict:
+    """The Meridian issuer reviewer uploads a fictional document (the standard source PDF)."""
     asset_id = created_asset["id"]
-    resp = await client.post(
+    resp = await issuer_client.post(
         f"/assets/{asset_id}/documents",
         data={"document_type": "prospectus", "title": "Q4 2024 Prospectus"},
-        files={"file": ("prospectus.pdf", minimal_pdf, "application/pdf")},
+        files={"file": ("prospectus.pdf", source_pdf, "application/pdf")},
     )
-    assert resp.status_code == 201, f"Belge yüklenemedi: {resp.text}"
+    assert resp.status_code == 201, f"Document could not be uploaded: {resp.text}"
     return resp.json()
 
 
 @pytest.fixture
-async def created_extraction(client: AsyncClient, created_document: dict) -> dict:
-    """Mock AI ile bir çıkarım oluşturur (taslak, 7 iddia)."""
+async def created_extraction(issuer_client: AsyncClient, created_document: dict) -> dict:
+    """Creates an extraction with the mock AI (draft, 7 claims)."""
     doc_id = created_document["id"]
-    resp = await client.post(f"/documents/{doc_id}/extractions")
-    assert resp.status_code == 201, f"Çıkarım oluşturulamadı: {resp.text}"
+    resp = await issuer_client.post(f"/documents/{doc_id}/extractions")
+    assert resp.status_code == 201, f"Extraction could not be created: {resp.text}"
     return resp.json()
+
+
+@pytest.fixture
+def admin_headers() -> dict:
+    """Bearer token header of the platform operator."""
+    return bearer(ADMIN_TOKEN)
 
 
 @pytest.fixture
 def issuer_headers() -> dict:
-    """İhraç eden inceleyici (Alice Chen) Bearer token başlığı."""
-    return {"Authorization": "Bearer test-issuer-token"}
+    """Bearer token header of the issuer reviewer (Alice Chen, Meridian)."""
+    return bearer(ISSUER_TOKEN)
 
 
 @pytest.fixture
 def legal_headers() -> dict:
-    """Bağımsız hukuk uzmanı (Bob Martinez) Bearer token başlığı."""
-    return {"Authorization": "Bearer test-legal-token"}
+    """Bearer token header of the independent legal expert (Bob Martinez, Meridian)."""
+    return bearer(LEGAL_TOKEN)
 
 
 @pytest.fixture
 def ai_headers() -> dict:
-    """AI kullanıcısı token başlığı — user_id 'ai-' ile başlar, onay 403 ile reddedilir."""
-    return {"Authorization": "Bearer test-ai-token"}
+    """Token header of the AI user — user_id starts with 'ai-', approval is rejected with 403."""
+    return bearer(AI_TOKEN)
+
+
+@pytest.fixture
+def other_issuer_headers() -> dict:
+    """Reviewer of another issuer (Harbor) — cannot access Meridian resources."""
+    return bearer(OTHER_ISSUER_TOKEN)
+
+
+@pytest.fixture
+def other_legal_headers() -> dict:
+    """Independent legal expert assigned only to Harbor."""
+    return bearer(OTHER_LEGAL_TOKEN)
 
 
 @pytest.fixture
@@ -203,16 +308,22 @@ async def approved_extraction(
     created_extraction: dict,
     issuer_headers: dict,
 ) -> dict:
-    """Bir çıkarımı onaylar ve çıkarım verisini döndürür."""
+    """Approves an extraction and returns the extraction data."""
     eid = created_extraction["id"]
     resp = await client.post(
         f"/extractions/{eid}/approvals", headers=issuer_headers, json={}
     )
-    assert resp.status_code == 201, f"Onay başarısız: {resp.text}"
+    assert resp.status_code == 201, f"Approval failed: {resp.text}"
     return created_extraction
 
 
 @pytest.fixture
 def inst_headers() -> dict:
-    """Kurumsal istemci API anahtarı başlığı (Meridian Capital Partners)."""
-    return {"X-API-Key": "test-inst-key-alpha"}
+    """Institutional client API key header (Meridian Capital Partners, Meridian scope)."""
+    return {"X-API-Key": INST_KEY_ALPHA}
+
+
+@pytest.fixture
+def inst_beta_headers() -> dict:
+    """Institutional client API key header (Apex Legal Research, Harbor scope only)."""
+    return {"X-API-Key": INST_KEY_BETA}

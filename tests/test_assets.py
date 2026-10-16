@@ -1,21 +1,24 @@
 """
-Phase 2 — Tokenized Asset Registry testleri.
+Phase 2 — Tokenized Asset Registry tests.
 
-Kurgusal test verileri kullanılmaktadır; gerçek bir şirketi veya varlığı temsil etmez.
-Stellar public key'ler format doğrulaması için manuel olarak oluşturulmuştur
-(56 karakter, G ile başlar, yalnızca RFC 4648 base32 karakterleri: A-Z ve 2-7).
+Fictional test data is used; it does not represent a real company or asset.
+The Stellar public keys were created manually for format validation
+(56 characters, starting with G, only RFC 4648 base32 characters: A-Z and 2-7).
 """
 
 import pytest
 from httpx import AsyncClient
 
-# ── Kurgusal test verisi ──────────────────────────────────────────────────────
+from tests.conftest import AGROCOMM_ISSUER, MERIDIAN_ISSUER
 
-# Geçerli bir Stellar public key: 56 karakter, G ile başlar, A-Z ve 2-7 içerir
+# ── Fictional test data ───────────────────────────────────────────────────────
+
+# A valid Stellar public key: 56 characters, starts with G, contains A-Z and 2-7
 _KEY_MERIDIAN = "GCEZFBCKNOXYELQZFQ7JKPWQABYOPZKVIPQLNOILMWMEXGWAF7RQJCUQ"
 _KEY_AGROCOMM = "GBVERHXLKQNF5ZPAW7MXJTDYRVCSUIQENBAHAGKFZ3PLMWT2YDRUQQXY"
 
 MERIDIAN_ASSET = {
+    "issuer_id": MERIDIAN_ISSUER,
     "blockchain_network": "stellar-mainnet",
     "stellar_asset_code": "MRPROP",
     "stellar_issuer_public_key": _KEY_MERIDIAN,
@@ -25,6 +28,7 @@ MERIDIAN_ASSET = {
 }
 
 AGROCOMM_ASSET = {
+    "issuer_id": AGROCOMM_ISSUER,
     "blockchain_network": "stellar-testnet",
     "stellar_asset_code": "AGRCOM",
     "stellar_issuer_public_key": _KEY_AGROCOMM,
@@ -34,13 +38,13 @@ AGROCOMM_ASSET = {
 }
 
 
-# ── Başarılı senaryolar ───────────────────────────────────────────────────────
+# ── Success scenarios ─────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_create_asset_returns_201(client: AsyncClient):
-    """Geçerli varlık kaydı 201 ve doğru alanlarla dönmeli."""
-    response = await client.post("/assets", json=MERIDIAN_ASSET)
+async def test_create_asset_returns_201(admin_client: AsyncClient):
+    """A valid asset registration must return 201 with the correct fields."""
+    response = await admin_client.post("/assets", json=MERIDIAN_ASSET)
 
     assert response.status_code == 201
     data = response.json()
@@ -53,33 +57,33 @@ async def test_create_asset_returns_201(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_list_assets_empty_on_start(client: AsyncClient):
-    """Henüz varlık eklenmemişken liste boş dönmeli."""
-    response = await client.get("/assets")
+async def test_list_assets_empty_on_start(admin_client: AsyncClient):
+    """The list must be empty while no asset has been added yet."""
+    response = await admin_client.get("/assets")
 
     assert response.status_code == 200
     assert response.json() == []
 
 
 @pytest.mark.asyncio
-async def test_list_assets_after_creation(client: AsyncClient):
-    """İki varlık eklendikten sonra liste ikisini de içermeli."""
-    await client.post("/assets", json=MERIDIAN_ASSET)
-    await client.post("/assets", json=AGROCOMM_ASSET)
+async def test_list_assets_after_creation(admin_client: AsyncClient):
+    """After two assets are added, the list must contain both."""
+    await admin_client.post("/assets", json=MERIDIAN_ASSET)
+    await admin_client.post("/assets", json=AGROCOMM_ASSET)
 
-    response = await client.get("/assets")
+    response = await admin_client.get("/assets")
 
     assert response.status_code == 200
     assert len(response.json()) == 2
 
 
 @pytest.mark.asyncio
-async def test_get_asset_by_id(client: AsyncClient):
-    """Var olan bir varlık ID ile doğru şekilde getirilmeli."""
-    create_resp = await client.post("/assets", json=MERIDIAN_ASSET)
+async def test_get_asset_by_id(admin_client: AsyncClient):
+    """An existing asset must be fetched correctly by ID."""
+    create_resp = await admin_client.post("/assets", json=MERIDIAN_ASSET)
     asset_id = create_resp.json()["id"]
 
-    response = await client.get(f"/assets/{asset_id}")
+    response = await admin_client.get(f"/assets/{asset_id}")
 
     assert response.status_code == 200
     assert response.json()["id"] == asset_id
@@ -87,124 +91,124 @@ async def test_get_asset_by_id(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_update_asset_status(client: AsyncClient):
-    """Varlık durumu 'suspended' olarak güncellenebilmeli."""
-    create_resp = await client.post("/assets", json=MERIDIAN_ASSET)
+async def test_update_asset_status(admin_client: AsyncClient):
+    """The asset status must be updatable to 'suspended'."""
+    create_resp = await admin_client.post("/assets", json=MERIDIAN_ASSET)
     asset_id = create_resp.json()["id"]
 
-    response = await client.patch(f"/assets/{asset_id}", json={"status": "suspended"})
+    response = await admin_client.patch(f"/assets/{asset_id}", json={"status": "suspended"})
 
     assert response.status_code == 200
     assert response.json()["status"] == "suspended"
-    # Blockchain kimlik alanları değişmemeli
+    # The blockchain identity fields must not change
     assert response.json()["stellar_asset_code"] == "MRPROP"
 
 
 @pytest.mark.asyncio
-async def test_update_asset_organization_name(client: AsyncClient):
-    """Organizasyon adı güncellenebilmeli, diğer alanlar korunmalı."""
-    create_resp = await client.post("/assets", json=MERIDIAN_ASSET)
+async def test_update_asset_organization_name(admin_client: AsyncClient):
+    """The organization name must be updatable while the other fields are preserved."""
+    create_resp = await admin_client.post("/assets", json=MERIDIAN_ASSET)
     asset_id = create_resp.json()["id"]
     new_name = "Meridian Property Holdings International LLC"
 
-    response = await client.patch(
+    response = await admin_client.patch(
         f"/assets/{asset_id}", json={"issuer_organization_name": new_name}
     )
 
     assert response.status_code == 200
     assert response.json()["issuer_organization_name"] == new_name
-    assert response.json()["jurisdiction"] == "US-NY"  # değişmemeli
+    assert response.json()["jurisdiction"] == "US-NY"  # must not change
 
 
 @pytest.mark.asyncio
-async def test_create_response_separates_blockchain_and_legal_fields(client: AsyncClient):
+async def test_create_response_separates_blockchain_and_legal_fields(admin_client: AsyncClient):
     """
-    Yanıt hem blockchain metadata hem de yasal metadata içermeli —
-    bu iki kavramın ayrı tutulduğunu doğrular.
+    The response must include both blockchain metadata and legal metadata —
+    verifies that these two concepts are kept separate.
     """
-    response = await client.post("/assets", json=MERIDIAN_ASSET)
+    response = await admin_client.post("/assets", json=MERIDIAN_ASSET)
     data = response.json()
 
     blockchain_fields = {"blockchain_network", "stellar_asset_code", "stellar_issuer_public_key"}
     legal_fields = {"issuer_organization_name", "asset_type", "jurisdiction", "status"}
 
     for field in blockchain_fields | legal_fields:
-        assert field in data, f"Eksik alan: {field}"
+        assert field in data, f"Missing field: {field}"
 
 
-# ── Hata / doğrulama senaryoları ──────────────────────────────────────────────
+# ── Error / validation scenarios ──────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_create_asset_invalid_code_too_long(client: AsyncClient):
-    """13 karakterli asset code 422 döndürmeli (maksimum 12)."""
+async def test_create_asset_invalid_code_too_long(admin_client: AsyncClient):
+    """A 13-character asset code must return 422 (maximum 12)."""
     payload = {**MERIDIAN_ASSET, "stellar_asset_code": "TOOLONGCODE13"}
-    response = await client.post("/assets", json=payload)
+    response = await admin_client.post("/assets", json=payload)
 
     assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_create_asset_invalid_code_xlm(client: AsyncClient):
-    """'XLM' native asset olduğu için kabul edilmemeli."""
+async def test_create_asset_invalid_code_xlm(admin_client: AsyncClient):
+    """'XLM' must not be accepted because it is the native asset."""
     payload = {**MERIDIAN_ASSET, "stellar_asset_code": "XLM"}
-    response = await client.post("/assets", json=payload)
+    response = await admin_client.post("/assets", json=payload)
 
     assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_create_asset_invalid_code_lowercase(client: AsyncClient):
-    """Küçük harfli asset code kabul edilmemeli."""
+async def test_create_asset_invalid_code_lowercase(admin_client: AsyncClient):
+    """A lowercase asset code must not be accepted."""
     payload = {**MERIDIAN_ASSET, "stellar_asset_code": "mrprop"}
-    response = await client.post("/assets", json=payload)
+    response = await admin_client.post("/assets", json=payload)
 
     assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_create_asset_invalid_key_too_short(client: AsyncClient):
-    """56 karakterden kısa public key 422 döndürmeli."""
+async def test_create_asset_invalid_key_too_short(admin_client: AsyncClient):
+    """A public key shorter than 56 characters must return 422."""
     payload = {**MERIDIAN_ASSET, "stellar_issuer_public_key": "GSHORTKEY"}
-    response = await client.post("/assets", json=payload)
+    response = await admin_client.post("/assets", json=payload)
 
     assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_create_asset_invalid_key_wrong_start_char(client: AsyncClient):
-    """'G' yerine 'A' ile başlayan 56 karakterli key kabul edilmemeli."""
+async def test_create_asset_invalid_key_wrong_start_char(admin_client: AsyncClient):
+    """A 56-character key starting with 'A' instead of 'G' must not be accepted."""
     # GCEZFB... → ACEZFB... (G → A)
     bad_key = "A" + _KEY_MERIDIAN[1:]
     payload = {**MERIDIAN_ASSET, "stellar_issuer_public_key": bad_key}
-    response = await client.post("/assets", json=payload)
+    response = await admin_client.post("/assets", json=payload)
 
     assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_create_asset_invalid_key_contains_zero(client: AsyncClient):
-    """'0' (sıfır) base32 alfabesinde geçersizdir; key reddedilmeli."""
-    # İkinci karakteri '0' ile değiştir: GC... → G0...
+async def test_create_asset_invalid_key_contains_zero(admin_client: AsyncClient):
+    """'0' (zero) is invalid in the base32 alphabet; the key must be rejected."""
+    # Replace the second character with '0': GC... → G0...
     bad_key = "G0" + _KEY_MERIDIAN[2:]
     payload = {**MERIDIAN_ASSET, "stellar_issuer_public_key": bad_key}
-    response = await client.post("/assets", json=payload)
+    response = await admin_client.post("/assets", json=payload)
 
     assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_get_asset_not_found(client: AsyncClient):
-    """Var olmayan ID ile sorgu 404 döndürmeli."""
-    response = await client.get("/assets/nonexistent-id-00000000")
+async def test_get_asset_not_found(admin_client: AsyncClient):
+    """A query with a non-existent ID must return 404."""
+    response = await admin_client.get("/assets/nonexistent-id-00000000")
 
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_update_asset_not_found(client: AsyncClient):
-    """Var olmayan varlığı güncelleme girişimi 404 döndürmeli."""
-    response = await client.patch(
+async def test_update_asset_not_found(admin_client: AsyncClient):
+    """An attempt to update a non-existent asset must return 404."""
+    response = await admin_client.patch(
         "/assets/nonexistent-id-00000000", json={"status": "retired"}
     )
 
@@ -212,18 +216,18 @@ async def test_update_asset_not_found(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_create_duplicate_asset_returns_409(client: AsyncClient):
-    """Aynı asset code + issuer key kombinasyonu tekrar eklenemez."""
-    await client.post("/assets", json=MERIDIAN_ASSET)
-    response = await client.post("/assets", json=MERIDIAN_ASSET)
+async def test_create_duplicate_asset_returns_409(admin_client: AsyncClient):
+    """The same asset code + issuer key combination cannot be added again."""
+    await admin_client.post("/assets", json=MERIDIAN_ASSET)
+    response = await admin_client.post("/assets", json=MERIDIAN_ASSET)
 
     assert response.status_code == 409
 
 
 @pytest.mark.asyncio
-async def test_create_asset_missing_required_field(client: AsyncClient):
-    """Zorunlu alan eksikse 422 döndürmeli."""
+async def test_create_asset_missing_required_field(admin_client: AsyncClient):
+    """A missing required field must return 422."""
     payload = {k: v for k, v in MERIDIAN_ASSET.items() if k != "jurisdiction"}
-    response = await client.post("/assets", json=payload)
+    response = await admin_client.post("/assets", json=payload)
 
     assert response.status_code == 422

@@ -1,17 +1,17 @@
 """
-Salt okunur Stellar Horizon ağ istemcisi.
+Read-only Stellar Horizon network client.
 
-Stellar Horizon REST API üzerinden httpx ile varlık bilgisi alır.
-Hiçbir zaman özel anahtar, cüzdan oluşturma veya işlem imzalama gerektirmez.
+Retrieves asset information through the Stellar Horizon REST API with httpx.
+Never requires a private key, wallet creation or transaction signing.
 
-API referansı: https://developers.stellar.org/api/horizon
+API reference: https://developers.stellar.org/api/horizon
 Testnet Horizon: https://horizon-testnet.stellar.org
 Mainnet Horizon: https://horizon.stellar.org
 
-SINIRLAMALAR:
-- Blockchain varlığı, yasal mülkiyetin kanıtı değildir.
-- Bu servis ağ verisini olduğu gibi aktarır; hukuki yorum yapmaz.
-- Yalnızca /assets endpoint'i kullanılır — okuma dışı işlem yoktur.
+LIMITATIONS:
+- Presence on the blockchain is not proof of legal ownership.
+- This service passes the network data through as is; it makes no legal interpretation.
+- Only the /assets endpoint is used — there are no non-read operations.
 """
 
 from datetime import datetime, timezone
@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from app.enums import BlockchainNetwork
 
-# ── Horizon endpoint URL'leri ──────────────────────────────────────────────────
+# ── Horizon endpoint URLs ──────────────────────────────────────────────────────
 
 HORIZON_URLS: dict[BlockchainNetwork, str] = {
     BlockchainNetwork.stellar_testnet: "https://horizon-testnet.stellar.org",
@@ -36,11 +36,11 @@ BLOCKCHAIN_DISCLAIMER = (
 )
 
 
-# ── İç veri modelleri ─────────────────────────────────────────────────────────
+# ── Internal data models ──────────────────────────────────────────────────────
 
 
 class AssetFlags(BaseModel):
-    """Stellar varlık bayrakları — ihraçcının belirlediği izin kısıtlamaları."""
+    """Stellar asset flags — permission restrictions set by the issuer."""
     auth_required: bool = False
     auth_revocable: bool = False
     auth_immutable: bool = False
@@ -48,15 +48,15 @@ class AssetFlags(BaseModel):
 
 
 class HorizonAssetRecord(BaseModel):
-    """Horizon /assets endpoint'inden normalize edilmiş tek kayıt."""
+    """A single normalized record from the Horizon /assets endpoint."""
     asset_type: str          # credit_alphanum4 / credit_alphanum12
-    num_accounts: int        # token tutan hesap sayısı
-    total_supply: str        # toplam dolaşımdaki miktar (7 ondalık)
+    num_accounts: int        # number of accounts holding the token
+    total_supply: str        # total circulating amount (7 decimals)
     flags: AssetFlags
 
 
 class StellarAssetInfo(BaseModel):
-    """StellarService.get_asset_info() dönüş tipi."""
+    """Return type of StellarService.get_asset_info()."""
     found_on_network: bool
     network: BlockchainNetwork
     horizon_url: str
@@ -64,25 +64,25 @@ class StellarAssetInfo(BaseModel):
     retrieved_at: datetime
 
 
-# ── Hata tipi ─────────────────────────────────────────────────────────────────
+# ── Error type ────────────────────────────────────────────────────────────────
 
 
 class StellarNetworkError(Exception):
-    """Horizon API ulaşılamadı veya beklenmeyen HTTP yanıtı aldı."""
+    """The Horizon API could not be reached or returned an unexpected HTTP response."""
 
 
-# ── Servis ───────────────────────────────────────────────────────────────────
+# ── Service ──────────────────────────────────────────────────────────────────
 
 
 class StellarService:
     """
-    Salt okunur Stellar Horizon istemcisi.
+    Read-only Stellar Horizon client.
 
-    Horizon REST API ile doğrudan HTTP çağrıları yapar:
+    Makes direct HTTP calls to the Horizon REST API:
       GET {horizon_url}/assets?asset_code={code}&asset_issuer={key}
 
-    Özel anahtar, cüzdan veya imzalama işlemi gerektirmez.
-    Ağ hatalarında StellarNetworkError fırlatır; çağıran 503 döndürür.
+    Requires no private key, wallet or signing operation.
+    Raises StellarNetworkError on network errors; the caller returns 503.
     """
 
     _DEFAULT_TIMEOUT = 10.0
@@ -97,11 +97,11 @@ class StellarService:
         network: BlockchainNetwork,
     ) -> StellarAssetInfo:
         """
-        Horizon'dan varlık bilgisi sorgular.
+        Queries Horizon for asset information.
 
-        - Varlık kayıtlıysa  → found_on_network=True, record dolu
-        - Varlık bulunamazsa → found_on_network=False, record=None
-        - Ağ hatası          → StellarNetworkError fırlatılır
+        - Asset registered    → found_on_network=True, record populated
+        - Asset not found     → found_on_network=False, record=None
+        - Network error       → StellarNetworkError is raised
         """
         horizon_url = HORIZON_URLS[network]
         try:
@@ -113,15 +113,15 @@ class StellarService:
                 response.raise_for_status()
         except httpx.TimeoutException as exc:
             raise StellarNetworkError(
-                f"Horizon bağlantısı zaman aşımına uğradı ({network.value})."
+                f"Horizon connection timed out ({network.value})."
             ) from exc
         except httpx.HTTPStatusError as exc:
             raise StellarNetworkError(
-                f"Horizon HTTP hatası: {exc.response.status_code} ({network.value})."
+                f"Horizon HTTP error: {exc.response.status_code} ({network.value})."
             ) from exc
         except httpx.RequestError as exc:
             raise StellarNetworkError(
-                f"Horizon ağ hatası: {type(exc).__name__} ({network.value})."
+                f"Horizon network error: {type(exc).__name__} ({network.value})."
             ) from exc
 
         records = response.json().get("_embedded", {}).get("records", [])
@@ -156,5 +156,5 @@ class StellarService:
 
 
 def get_stellar_service() -> StellarService:
-    """FastAPI bağımlılığı — testlerde mock ile değiştirilir."""
+    """FastAPI dependency — replaced with a mock in tests."""
     return StellarService()

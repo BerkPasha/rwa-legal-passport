@@ -1,8 +1,14 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
+import { http, HttpResponse } from 'msw'
+import { server } from './mocks/server'
+import { MOCK_ASSET } from './mocks/handlers'
+import { setUserToken } from '../api'
 import { AssetList } from '../pages/AssetList'
+
+afterEach(() => setUserToken(''))
 
 function renderWithRouter() {
   return render(
@@ -65,6 +71,7 @@ describe('AssetList', () => {
     await screen.findByText('MRPROP')
     await userEvent.click(screen.getByRole('button', { name: /register asset/i }))
 
+    await userEvent.type(screen.getByLabelText('Issuer ID'), 'test-issuer')
     await userEvent.type(screen.getByPlaceholderText('MRPROP'), 'NEWASSET')
     await userEvent.type(screen.getByPlaceholderText('G…'), 'GTEST1234')
     await userEvent.type(screen.getByPlaceholderText(/Meridian/i), 'Test Corp')
@@ -76,5 +83,31 @@ describe('AssetList', () => {
     await waitFor(() => {
       expect(screen.queryByText('Register New Tokenized Asset')).not.toBeInTheDocument()
     })
+  })
+
+  it('sends issuer_id and the user Bearer token when registering', async () => {
+    const captured: { body?: Record<string, unknown>; auth?: string | null } = {}
+    server.use(
+      http.post('http://localhost:8000/assets', async ({ request }) => {
+        captured.body = await request.json() as Record<string, unknown>
+        captured.auth = request.headers.get('Authorization')
+        return HttpResponse.json({ ...MOCK_ASSET, ...captured.body, id: 'asset-new' }, { status: 201 })
+      }),
+    )
+    setUserToken('fictional-admin-token')
+    renderWithRouter()
+    await screen.findByText('MRPROP')
+    await userEvent.click(screen.getByRole('button', { name: /register asset/i }))
+
+    await userEvent.type(screen.getByLabelText('Issuer ID'), 'Meridian-Property ')
+    await userEvent.type(screen.getByPlaceholderText('MRPROP'), 'NEWASSET')
+    await userEvent.type(screen.getByPlaceholderText('G…'), 'GTEST1234')
+    await userEvent.type(screen.getByPlaceholderText(/Meridian/i), 'Test Corp')
+    await userEvent.type(screen.getByPlaceholderText('US-NY'), 'US-CA')
+    await userEvent.click(screen.getAllByRole('button', { name: /register asset/i })[1])
+
+    await waitFor(() => expect(captured.body).toBeDefined())
+    expect(captured.body?.issuer_id).toBe('meridian-property')
+    expect(captured.auth).toBe('Bearer fictional-admin-token')
   })
 })

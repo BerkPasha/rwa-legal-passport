@@ -1,78 +1,74 @@
 """
-Reviewer kimlik doğrulama modülü.
+Bearer token authentication and role-based authorization.
 
-HTTP Bearer token ile koruma sağlar.
-Her token belirli bir kullanıcıya ve role bağlıdır.
+Credentials are read from the access-configuration file (see app/access_registry.py);
+the file contains only SHA-256 digests of tokens. There are no tokens in the source code.
 
-GİZLİLİK:
-Token değerleri kaynak kodda tutulmaz; .env dosyasından okunur
-(REVIEWER_ISSUER_TOKEN, REVIEWER_LEGAL_TOKEN). Boş bırakılan token devre dışıdır.
+Response rules:
+- No Authorization header               → 403 (FastAPI HTTPBearer default)
+- Invalid / disabled token              → 401
+- The role lacks the permission         → 403
+- The resource belongs to another issuer → 404 (app/authorization.py; does not reveal that it exists)
 
-ÜRETİM NOTU:
-Üretimde JWT tabanlı bir kimlik sağlayıcıyla (OAuth2/OIDC) değiştirilmelidir.
+PRODUCTION NOTE:
+In production this should be replaced with a JWT/OIDC-based identity provider; the
+Principal model and the require_permission() dependency can stay the same.
 
-AI ONAY YASAĞI:
-AI servisi geçerli bir Bearer token'a sahip değildir.
-Tüm onay talepleri insan kimlik doğrulaması gerektirir.
-Kod katmanında ek kontrol: kullanıcı kimliği "ai-" ile başlıyorsa reddedilir.
+AI APPROVAL BAN:
+The AI service has no credentials. Additional check in the code layer: if the user
+ID starts with "ai-", the approval is rejected (app/routers/review.py).
 """
 
+from typing import Callable
+
 from fastapi import Depends, HTTPException, Security, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.config import settings
-from app.enums import ReviewerRole
+from app.access_registry import AccessRegistry, Principal, get_access_registry, security_logger
+from app.permissions import Permission
 
-_bearer = HTTPBearer()
-
-
-class ReviewerInfo(BaseModel):
-    """Kimliği doğrulanmış inceleyicinin profili."""
-    user_id: str
-    display_name: str
-    role: ReviewerRole
-
-
-# ── Kayıtlı inceleyiciler ─────────────────────────────────────────────────────
-# Üretimde veritabanı destekli kullanıcı yönetimiyle değiştirilecek.
-_ISSUER_REVIEWER = ReviewerInfo(
-    user_id="alice-chen-01",
-    display_name="Alice Chen",
-    role=ReviewerRole.issuer_reviewer,
-)
-_LEGAL_REVIEWER = ReviewerInfo(
-    user_id="bob-martinez-01",
-    display_name="Bob Martinez",
-    role=ReviewerRole.independent_legal_reviewer,
+_bearer = HTTPBearer(
+    description="User token (platform_admin, issuer_reviewer, independent_legal_reviewer).",
 )
 
 
-def get_reviewer_registry() -> dict[str, ReviewerInfo]:
-    """
-    FastAPI bağımlılığı: token → inceleyici eşlemesi (token'lar .env'den).
-    Testlerde kurgusal test token'larıyla değiştirilir.
-    """
-    tokens = {
-        settings.reviewer_issuer_token: _ISSUER_REVIEWER,
-        settings.reviewer_legal_token: _LEGAL_REVIEWER,
-    }
-    return {token: reviewer for token, reviewer in tokens.items() if token}
-
-
-def get_current_reviewer(
+def get_current_principal(
     credentials: HTTPAuthorizationCredentials = Security(_bearer),
-    registry: dict[str, ReviewerInfo] = Depends(get_reviewer_registry),
-) -> ReviewerInfo:
+    registry: AccessRegistry = Depends(get_access_registry),
+) -> Principal:
     """
-    FastAPI bağımlılığı: Bearer token'ı doğrular ve inceleyici profilini döner.
-    Geçersiz token → 401 Unauthorized
+    FastAPI dependency: validates the Bearer token and returns the user profile.
+    Invalid token → 401 Unauthorized
     """
-    reviewer = registry.get(credentials.credentials)
-    if reviewer is None:
+    principal = registry.authenticate_user(credentials.credentials)
+    if principal is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Geçersiz veya eksik kimlik doğrulama token'ı.",
+            detail="Invalid or missing authentication token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return reviewer
+    return principal
+
+
+def require_permission(permission: Permission) -> Callable[..., Principal]:
+    """
+    Builds a dependency that checks a role permission.
+    Usage: principal: Principal = Depends(require_permission(Permission.asset_read))
+    """
+
+    def _dependency(principal: Principal = Depends(get_current_principal)) -> Principal:
+        if not principal.has_permission(permission):
+            security_logger.warning(
+                "authz.permission_denied user=%s role=%s permission=%s",
+                principal.user_id,
+                principal.role.value,
+                permission.value,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to perform this operation.",
+            )
+        return principal
+
+    _dependency.__name__ = f"require_{permission.name}"
+    return _dependency

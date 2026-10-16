@@ -1,50 +1,89 @@
 """
-AI çıkarım şemaları.
+AI extraction schemas.
 
-İki katman:
-  - İç şemalar (AIExtractionResult, RawClaim): AI servisi ile iletişim için.
-    Asla doğrudan API yanıtı olarak döndürülmez.
-  - Dış şemalar (LegalExtractionResponse, LegalClaimResponse): API yanıtları.
-    Her zaman sorumluluk reddi içerir.
+Two layers:
+  - Internal schemas (AIExtractionResult, RawClaim): for communication with the AI service.
+    Never returned directly as an API response.
+  - External schemas (LegalExtractionResponse, LegalClaimResponse): API responses.
+    Always include the disclaimer.
 """
 
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
-from app.enums import ExtractionStatus, LegalFieldName
+from app.enums import (
+    ApprovalStaleReason,
+    ApprovalType,
+    EvidenceStatus,
+    ExtractionApprovalState,
+    ExtractionStatus,
+    LegalFieldName,
+)
 
 
-# ── AI servis iç şemaları (veritabanına yazılmaz) ────────────────────────────
+# ── Internal AI service schemas (not written to the database) ────────────────
 
 
 class ClaimSource(BaseModel):
-    """Bir iddianın belgedeki kaynak referansı."""
-    page_number: Optional[int] = None
-    supporting_passage: str  # belgeden birebir alıntı
+    """Source reference of a claim within the document."""
+    # Strict: lax coercion would turn the JSON value true into page 1
+    page_number: Optional[StrictInt] = None
+    supporting_passage: str  # verbatim quote from the document
 
 
 class RawClaim(BaseModel):
-    """AI'ın döndürdüğü tek bir yasal hak iddiası."""
+    """
+    A single legal-rights claim returned by the AI.
+    Validated and canonicalized by app.services.ai.validate_ai_claims before it is stored.
+    """
     field: LegalFieldName
-    value: str               # kanıt yoksa "unknown" string'i
-    is_unknown: bool
+    value: str               # the string "unknown" if there is no evidence
+    is_unknown: StrictBool   # strict: "yes" or 1 is not a valid flag
     source: Optional[ClaimSource] = None
 
 
 class AIExtractionResult(BaseModel):
     """
-    AI servisinden dönen ham sonuç.
-    Router tarafından veritabanına aktarılmadan önce işlenir.
+    Raw result returned by the AI service.
+    Processed by the router before it is written to the database.
     """
     claims: list[RawClaim]
     ai_model: str
     extraction_timestamp: datetime
-    disclaimer: str          # sorumluluk reddi — her zaman dolu
+    disclaimer: str          # disclaimer — always populated
 
 
-# ── API yanıt şemaları (istemciye döndürülür) ────────────────────────────────
+# ── API response schemas (returned to the client) ────────────────────────────
+
+
+class ClaimEvidenceResponse(BaseModel):
+    """
+    Deterministic source-text check of the claim's quotation (Stage 9B-4, app/evidence.py),
+    evaluated on every read against the extracted page text of the extraction's own document
+    version. It proves source-text presence only: it is not legal correctness, reviewer
+    approval or independent legal verification.
+    """
+    status: EvidenceStatus = Field(
+        description="'verified' only if the quotation appears on the cited page; every other value is a failure."
+    )
+    cited_page: Optional[int] = Field(
+        default=None, description="Cited page number if it is an integer, even when it is out of range."
+    )
+    found_on_pages: list[int] = Field(
+        default_factory=list, description="Pages of this document version on which the quotation appears."
+    )
+    page_count: int = Field(description="Number of pages of the checked document version.")
+    version_number: Optional[int] = Field(
+        default=None,
+        description="Checked document version: the extraction's own version, never a newer one. "
+                    "Null if that version's text is unavailable.",
+    )
+    verification_method: str = Field(description="Matching method (exact substring on token boundaries).")
+    normalization_version: int = Field(description="Version of the text normalization rules.")
+    scope: str = Field(description="Always 'source_text_presence_only': the check proves nothing more.")
+    explanation: str = Field(description="Human-readable reason for the status.")
 
 
 class LegalClaimResponse(BaseModel):
@@ -56,21 +95,39 @@ class LegalClaimResponse(BaseModel):
     source_page: Optional[int] = None
     supporting_passage: Optional[str] = None
     created_at: datetime
+    evidence: ClaimEvidenceResponse
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ExtractionApprovalStateResponse(BaseModel):
+    """Approval currency of an extraction, derived from its approval records on every read."""
+    state: ExtractionApprovalState = Field(
+        description="not_approved, current, stale (re-review possible) or superseded (newer document version)."
+    )
+    version_is_current: bool = Field(
+        description="False if the extraction belongs to a superseded document version; it can no longer be approved."
+    )
+    current_approval_types: list[ApprovalType] = Field(
+        default_factory=list, description="Approval types that are currently valid."
+    )
+    reasons: list[ApprovalStaleReason] = Field(
+        default_factory=list, description="Why the existing approvals are not current."
+    )
 
 
 class LegalExtractionResponse(BaseModel):
     id: str
     document_id: str
     version_id: str
-    # Yalnızca "draft" — otomatik onay uygulanmaz
+    # "draft" only — automatic approval is never applied
     status: ExtractionStatus
     ai_model: str
-    # Her yanıtta görünen sorumluluk reddi
+    # Disclaimer shown in every response
     disclaimer: str
     extraction_timestamp: datetime
     created_at: datetime
     claims: list[LegalClaimResponse] = []
+    approval_state: ExtractionApprovalStateResponse
 
     model_config = ConfigDict(from_attributes=True)
