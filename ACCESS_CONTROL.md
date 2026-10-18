@@ -50,6 +50,7 @@ Institutional keys carry **operations** (currently only `passport:read`) and a s
 | Method | Route | Guard | Tenant check |
 |---|---|---|---|
 | GET | `/health` | public | — |
+| GET | `/ready` | public (readiness probe; answers only `ready` / `not_ready`) | — |
 | GET | `/auth/me` | any user token | — |
 | POST | `/assets` | `asset:create` | `issuer_id` must exist in the registry and be in scope |
 | GET | `/assets` | `asset:read` | list filtered to the caller's issuers |

@@ -2,7 +2,7 @@
 Stage 9B-1 — Authentication, authorization, tenant isolation and CORS tests.
 
 Coverage:
- 1. Route inventory: every route except /health requires authentication and is
+ 1. Route inventory: every route except /health and /ready requires authentication and is
     protected by the expected permission (the test fails if a new route is added).
  2. No / invalid / revoked credential → 403 / 401.
  3. Wrong credential type: an API key cannot access internal routes, a Bearer token cannot access the passport.
@@ -49,7 +49,10 @@ _ZERO_ID = "00000000-0000-0000-0000-000000000000"
 # (method, path) → the dependency that protects the route. When a new route is added,
 # the test fails until this table is updated: every new endpoint needs a deliberate authorization decision.
 EXPECTED_ROUTE_GUARDS: dict[tuple[str, str], str | None] = {
-    ("GET", "/health"): None,  # the only public route: liveness check
+    ("GET", "/health"): None,  # public: liveness check
+    # Public: readiness probe for load balancers and supervisors, which hold no credential (Stage
+    # 10C-3B, T2). It answers {"status": "ready" | "not_ready"} only and reads no tenant data.
+    ("GET", "/ready"): None,
     ("GET", "/auth/me"): "get_current_principal",
     ("GET", "/ai/status"): "require_extraction_read",
     ("POST", "/assets"): "require_asset_create",
@@ -188,11 +191,12 @@ def test_route_inventory_matches_expected_guards():
 
 
 def test_every_protected_route_authenticates():
-    """The dependency tree of every route except /health contains an authenticator."""
+    """The dependency tree of every route except /health and /ready contains an authenticator."""
+    public = {("GET", "/health"), ("GET", "/ready")}
     for key, route in _api_routes().items():
         calls = _dependency_calls(route.dependant)
         authenticated = get_current_principal in calls or get_institutional_client in calls
-        assert authenticated or key == ("GET", "/health"), f"{key} has no authentication"
+        assert authenticated or key in public, f"{key} has no authentication"
 
 
 # ── 2. No / invalid / revoked credential ──────────────────────────────────────

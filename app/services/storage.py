@@ -154,6 +154,30 @@ class StorageService:
             return False
 
 
+def storage_root_problem(base_path: str, *, writable: bool) -> str | None:
+    """
+    Readiness check of the storage root (Stage 10C-3B, T2; GET /ready). Unlike StorageService, it
+    never creates the root, and it writes nothing: the root must exist (resolved like
+    StorageService does), be a directory, be listable (at most one entry is read; no document is
+    opened) and, if `writable`, allow writing as far as os.access can tell without a write.
+    Returns None if the root is usable, otherwise a reason code (never a path).
+    """
+    try:
+        root = Path(base_path).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return "missing"
+    if not root.is_dir():
+        return "not_a_directory"
+    try:
+        with os.scandir(root) as entries:
+            next(entries, None)
+    except OSError:
+        return "not_readable"
+    if writable and not os.access(root, os.W_OK):
+        return "not_writable"
+    return None
+
+
 def get_storage() -> StorageService:
     """FastAPI dependency: default storage service."""
     return StorageService(settings.storage_path)

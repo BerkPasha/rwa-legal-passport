@@ -127,3 +127,21 @@ The working directory is the bundle's `deploy/` directory: the repository's `.en
 4. **Hosting decisions:** a domain, a host (see GRANT_DEMO.md §7) and who operates and monitors it.
 5. **Publishing the evaluator credentials:** decide how the evaluator credentials are handed out, and rotate them by rebuilding the bundle.
 6. **The genuine anchor:** it lives in the local demo dataset only. The bundle is reproducible with it only from that dataset (`DEMO.md`).
+
+## 7. Liveness and readiness probes (Stage 10C-3B, T2)
+
+| | `GET /health` (liveness) | `GET /ready` (readiness) |
+|---|---|---|
+| Question | Is the process up and answering? | Can it safely serve requests now? |
+| Checks | Nothing beyond answering | Database `SELECT 1`; the access registry is present and valid; the storage root exists, is a directory, can be listed and, unless `READ_ONLY_MODE`, is writable |
+| Answer | 200 with version, environment and the three showcase flags | 200 `{"status": "ready"}` or 503 `{"status": "not_ready"}` |
+| On failure | A supervisor may restart the process | A load balancer withholds traffic; no restart needed |
+
+- **Nothing is revealed.** `/ready` is public like `/health`, because probes hold no credential. Its answer names no component, path, issuer or error. The failed components are logged on the server: `readiness.not_ready failed=database:database_file_missing,storage:missing`. The log gives reason codes or exception types only, never an exception message.
+- **Nothing is changed.** The probe creates, migrates and writes nothing:
+  - a missing SQLite file is reported, never created;
+  - the storage root is never created, so it must exist before the server is ready;
+  - the registry is the cached one every request uses, parsed again only after the file has changed.
+- **Not an integrity check.** The probe verifies no document digest, evidence manifest or Stellar anchor, and contacts no external service. Each component has 3 seconds, and the components are checked concurrently.
+- **Probe the backend directly** at `http://127.0.0.1:8000/ready`. The proxy also forwards `/api/ready`, which reveals nothing. With `CLIENT_RATE_LIMIT_PER_MINUTE` set, the probe counts against the probing address, so keep the limit above the probe rate.
+- **Limits:** `SELECT 1` proves the database answers, not that its tables are intact. The startup schema check covers that when the server starts. On Windows, `os.access` cannot detect a directory without write permission.

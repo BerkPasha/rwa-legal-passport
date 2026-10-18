@@ -47,7 +47,7 @@ copy .env.example .env
 
 ### 6. Set up access control (users, roles, issuer scopes)
 
-Every endpoint except `/health` requires authentication. Users, their roles, issuer (tenant) scopes and institutional API keys are defined in the `access_control.json` file; the file contains **only SHA-256 digests** and is not added to Git.
+Every endpoint except `/health` and `/ready` requires authentication. Users, their roles, issuer (tenant) scopes and institutional API keys are defined in the `access_control.json` file; the file contains **only SHA-256 digests** and is not added to Git.
 
 ```powershell
 copy access_control.example.json access_control.json
@@ -75,7 +75,8 @@ The server starts at `http://127.0.0.1:8000`.
 
 | URL | Description |
 |-----|----------|
-| `http://127.0.0.1:8000/health` | Health check |
+| `http://127.0.0.1:8000/health` | Health check (liveness: the process answers) |
+| `http://127.0.0.1:8000/ready` | Readiness check: database, access registry and document storage (200 or 503, see [DEPLOYMENT.md §7](DEPLOYMENT.md)) |
 | `http://127.0.0.1:8000/docs` | Swagger UI (interactive API documentation) |
 | `http://127.0.0.1:8000/redoc` | ReDoc documentation |
 
