@@ -19,6 +19,11 @@ from app.middleware import (
 from app.routers import (
     ai_status, assets, auth, blockchain, documents, extractions, health, passport, review, stellar_anchors,
 )
+from app.logging_config import configure_logging
+
+# The application's INFO security and audit events reach the server log (Stage 10C-3B, T1;
+# app/logging_config.py). Idempotent; an existing logging configuration is kept.
+configure_logging()
 
 # ── OpenAPI tag metadata ──────────────────────────────────────────────────────
 _tags_metadata = [

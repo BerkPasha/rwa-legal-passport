@@ -143,7 +143,10 @@ class ReadOnlyModeMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http" and settings.read_only_mode and scope["method"].upper() not in _SAFE_METHODS:
             from app.access_registry import security_logger
-            security_logger.info("request.refused_read_only method=%s path=%s", scope["method"], scope["path"])
+            from app.logging_config import escape_control_characters
+            # The path is percent-decoded request input: escaped and shortened before it is logged
+            security_logger.info("request.refused_read_only method=%s path=%s", scope["method"],
+                                 escape_control_characters(scope["path"])[:200])
             await _send_error(send, 403, READ_ONLY_DETAIL, read_only_mode=True)
             return
         await self.app(scope, receive, send)
