@@ -1,5 +1,8 @@
 import { http, HttpResponse } from 'msw'
 import type {
+  AIStatus,
+  CurrentUser,
+  AnchorVerification,
   BlockchainStatus,
   ClaimEvidence,
   Document,
@@ -8,6 +11,7 @@ import type {
   LegalExtraction,
   LegalPassport,
   ReviewApproval,
+  StellarAnchor,
 } from '../../types'
 
 const BASE = 'http://localhost:8000'
@@ -21,6 +25,10 @@ export const BACKEND_PASSPORT_DISCLAIMER = 'INSTITUTIONAL USE ONLY — This lega
 export const BACKEND_BLOCKCHAIN_DISCLAIMER = 'BLOCKCHAIN VERIFICATION ONLY — Asset presence on the Stellar network does NOT establish legal ownership, regulatory compliance, investment suitability, or any legally binding rights. Always consult qualified legal counsel for legal conclusions.'
 export const BACKEND_SOURCE_TEXT_NOTICE = 'Text extracted from the PDF text layer of exactly this document version when it was uploaded; pages without a text layer are empty (no OCR). It is evidence material only: it is not a legal interpretation and does not establish legal validity, ownership or enforceability.'
 export const BACKEND_VERIFICATION_MEANING = 'Source-text verification establishes only that the quotation appears on the cited page of the approved document version. It does not establish legal enforceability, ownership authenticity, investor entitlement, regulatory compliance, issuer solvency or an independent legal opinion. Reviewer approvals are internal attestations, not legal opinions.'
+
+// Stellar Testnet anchoring (app/schemas/stellar_anchor.py; tests/test_stellar_anchoring.py checks the literals)
+export const BACKEND_ANCHOR_DISCLAIMER = 'BLOCKCHAIN ANCHOR ONLY — A Stellar transaction proves that the anchoring account recorded this evidence digest at a ledger time. It does not establish legal validity, ownership, regulatory compliance, the authenticity of documents or an independent legal approval. Stellar Testnet is reset periodically; Testnet anchors are for demonstration and testing.'
+export const BACKEND_ANCHOR_MEANING = "verified means: a successful Stellar Testnet transaction from the configured anchoring account carries this manifest digest (memo hash and manage_data entry), the stored manifest hashes to that digest, and the passport's current evidence manifest has exactly the same digest. Any other result is not a verification."
 
 export const MOCK_ASSET = {
   id: 'asset-001',
@@ -88,6 +96,7 @@ export const MOCK_EXTRACTION: LegalExtraction = {
   version_id: 'ver-001',
   status: 'approved',
   ai_model: 'claude-3-5-sonnet',
+  source: 'ai_service',
   disclaimer: BACKEND_AI_DISCLAIMER,
   extraction_timestamp: '2024-01-02T00:00:00Z',
   created_at: '2024-01-02T00:00:00Z',
@@ -155,6 +164,7 @@ export const MOCK_PASSPORT: LegalPassport = {
     status: 'active',
   },
   verification_level: 'issuer_attested',
+  verification_status: 'partially_source_verified', // one of the seven legal fields
   legal_rights: [
     {
       field_name: 'ownership_nature',
@@ -221,6 +231,7 @@ export const MOCK_PASSPORT: LegalPassport = {
   extraction_metadata: {
     extraction_id: 'ext-001',
     ai_model: 'claude-haiku-4-5-20251001',
+    extraction_source: 'ai_service',
     extraction_timestamp: '2024-01-02T00:00:00Z',
     passport_version: 1,
     effective_date: '2024-01-03T00:00:00Z',
@@ -233,6 +244,8 @@ export const MOCK_PASSPORT: LegalPassport = {
     conflicting_field_count: 0,
     reviewer_attestation_recorded: true,
     independent_reviewer_attestation_recorded: false,
+    issuer_attestation_recorded: true,
+    legal_reviewer_approval_recorded: false,
     evidence_scope: 'source_text_presence_only',
     verification_method: 'exact_substring_token_boundary',
     normalization_version: 1,
@@ -264,7 +277,100 @@ export const MOCK_APPROVAL: ReviewApproval = {
   currency: { is_current: true, reasons: [] },
 }
 
+// Same shapes as the backend's StellarAnchorResponse and AnchorVerificationResponse (values of the
+// demo's real Testnet transaction, which are public on-chain data)
+const MOCK_TX = '1687c0ddc4a85b07b3ec13e9064aa57a4556e8993b9ff78080b5ac9d628123d2'
+const MOCK_DIGEST = '5c760dba64aaf5633ec2a89c9b8641e2c3867b8a08ade7c6c882ff153f4dd057'
+const MOCK_ANCHOR_ACCOUNT = 'GADWA6F3V4BTB3M56BWUBRD5AJVX3WSVIGGWN5BQRTHFXKNUKHRWPDOT'
+
+export const MOCK_STELLAR_ANCHOR: StellarAnchor = {
+  id: 'anchor-001',
+  asset_id: 'asset-001',
+  network: 'stellar-testnet',
+  manifest_schema: 'rwa-legal-passport/evidence-manifest',
+  manifest_version: 1,
+  manifest_digest: MOCK_DIGEST,
+  anchor_account: MOCK_ANCHOR_ACCOUNT,
+  data_name: 'lp:asset-001',
+  transaction_hash: MOCK_TX,
+  status: 'confirmed',
+  attempts: 1,
+  ledger: 5241718,
+  ledger_closed_at: '2026-10-17T10:16:17Z',
+  valid_until: '2026-10-17T10:21:12Z',
+  failure_reason: null,
+  requested_by: 'alice-chen-01',
+  created_at: '2026-10-17T10:16:12Z',
+  updated_at: '2026-10-17T10:16:18Z',
+  horizon_transaction_url: `https://horizon-testnet.stellar.org/transactions/${MOCK_TX}`,
+  disclaimer: BACKEND_ANCHOR_DISCLAIMER,
+}
+
+export const MOCK_ANCHOR_VERIFICATION: AnchorVerification = {
+  asset: {
+    identifier_type: 'stellar_classic_asset',
+    network: 'stellar-testnet',
+    asset_code: 'MRPROP',
+    asset_issuer: 'GABC1234567890',
+    stellar_asset_type: 'credit_alphanum12',
+  },
+  manifest_schema: 'rwa-legal-passport/evidence-manifest',
+  manifest_version: 1,
+  current_passport_available: true,
+  current_manifest_digest: MOCK_DIGEST,
+  anchor: {
+    manifest_digest: MOCK_DIGEST,
+    transaction_hash: MOCK_TX,
+    status: 'confirmed',
+    anchor_account: MOCK_ANCHOR_ACCOUNT,
+    data_name: 'lp:asset-001',
+    ledger: 5241718,
+    ledger_closed_at: '2026-10-17T10:16:17Z',
+    anchored_at: '2026-10-17T10:16:12Z',
+    horizon_transaction_url: `https://horizon-testnet.stellar.org/transactions/${MOCK_TX}`,
+  },
+  evidence_matches_anchor: true,
+  onchain: {
+    checked: true,
+    network_passphrase_matches: true,
+    transaction_found: true,
+    successful: true,
+    source_account_matches: true,
+    memo_matches: true,
+    operation_matches: true,
+    ledger: 5241718,
+    ledger_closed_at: '2026-10-17T10:16:17Z',
+    error: null,
+  },
+  result: 'verified',
+  verified: true,
+  committed_manifest_canonical_json: '{"schema":"rwa-legal-passport/evidence-manifest","schema_version":1}',
+  meaning: BACKEND_ANCHOR_MEANING,
+  disclaimer: BACKEND_ANCHOR_DISCLAIMER,
+  checked_at: '2026-10-17T11:00:00Z',
+}
+
+// GET /auth/me and GET /ai/status (Stage 10B-2): a signed-in issuer reviewer, and an available external provider
+export const MOCK_CURRENT_USER: CurrentUser = {
+  user_id: 'issuer-reviewer-01', display_name: 'Test Issuer Reviewer', role: 'issuer_reviewer',
+  scope: 'issuers', issuer_ids: ['meridian-property'],
+  // The issuer reviewer's permissions (app/permissions.py)
+  permissions: ['asset:read', 'document:upload', 'document:read', 'extraction:run', 'extraction:read', 'review:start',
+                'claim:correct', 'approval:create', 'audit:read', 'anchor:create'],
+}
+
+export const MOCK_AI_STATUS: AIStatus = {
+  available: true, status: 'available', external_processor: 'Anthropic', model: 'claude-opus-5-5',
+  supported_models: ['claude-haiku-4-5', 'claude-haiku-4-5-20251001', 'claude-haiku-5-5', 'claude-opus-5-5', 'claude-sonnet-4-6', 'claude-sonnet-5-5'],
+  message: 'AI extraction is available. The text of a document version is sent to Anthropic only after an explicit confirmation.',
+}
+
 export const handlers = [
+  http.get(`${BASE}/auth/me`, () => HttpResponse.json(MOCK_CURRENT_USER)),
+  // An ordinary server: writable, not declared synthetic, docs served (Stage 10C-1)
+  http.get(`${BASE}/health`, () => HttpResponse.json(
+    { status: 'ok', version: '0.1.0', environment: 'test', read_only: false, synthetic_data: false, api_docs: true })),
+  http.get(`${BASE}/ai/status`, () => HttpResponse.json(MOCK_AI_STATUS)),
   // Assets
   http.get(`${BASE}/assets`, () => {
     return HttpResponse.json([MOCK_ASSET])
@@ -362,5 +468,17 @@ export const handlers = [
       return HttpResponse.json({ detail: 'API key required' }, { status: 403 })
     }
     return HttpResponse.json(MOCK_PASSPORT)
+  }),
+
+  // Stellar Testnet evidence anchoring
+  http.get(`${BASE}/assets/:id/stellar-anchors/verification`, () => HttpResponse.json(MOCK_ANCHOR_VERIFICATION)),
+  http.get(`${BASE}/assets/:id/stellar-anchors`, () => HttpResponse.json([MOCK_STELLAR_ANCHOR])),
+  http.post(`${BASE}/assets/:id/stellar-anchors`, () => HttpResponse.json(MOCK_STELLAR_ANCHOR, { status: 200 })),
+  http.post(`${BASE}/assets/:id/stellar-anchors/:anchorId/refresh`, () => HttpResponse.json(MOCK_STELLAR_ANCHOR)),
+  http.get(`${BASE}/passport/:network/:assetCode/:issuerKey/stellar-anchor`, ({ request }) => {
+    if (!request.headers.get('X-API-Key')) {
+      return HttpResponse.json({ detail: 'API key required' }, { status: 403 })
+    }
+    return HttpResponse.json(MOCK_ANCHOR_VERIFICATION)
   }),
 ]

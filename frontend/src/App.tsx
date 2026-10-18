@@ -6,6 +6,7 @@ import { AssetDetail } from './pages/AssetDetail'
 import { ExtractionDetail } from './pages/ExtractionDetail'
 import { PassportPreview } from './pages/PassportPreview'
 import { ApiDocs } from './pages/ApiDocs'
+import { NotFound } from './pages/NotFound'
 
 export function App() {
   return (
@@ -17,6 +18,7 @@ export function App() {
         <Route path="assets/:id/documents/:docId/extractions/:extractionId" element={<ExtractionDetail />} />
         <Route path="passport" element={<PassportPreview />} />
         <Route path="api-docs" element={<ApiDocs />} />
+        <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
   )

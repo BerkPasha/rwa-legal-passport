@@ -315,7 +315,9 @@ async def _upload(client: AsyncClient, asset_id: str, headers: dict) -> dict:
 
 async def _trigger(client: AsyncClient, document_id: str, headers: dict, service):
     app.dependency_overrides[get_ai_service] = lambda: service
-    return await client.post(f"/documents/{document_id}/extractions", headers=headers)
+    # The real service is an external processor: the request confirms it (Stage 10A-2); mocks ignore it
+    return await client.post(f"/documents/{document_id}/extractions", headers=headers,
+                             json={"confirm_external_processing": True})
 
 
 DUPLICATE_SETS = {

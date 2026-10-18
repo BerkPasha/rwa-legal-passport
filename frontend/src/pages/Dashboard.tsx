@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { getAssets, ApiError } from '../api'
 import type { Asset } from '../types'
 import { PageSpinner } from '../components/Spinner'
+import { useAuth } from '../AuthContext'
 
 function StatCard({
   label,
@@ -38,13 +39,22 @@ export function Dashboard() {
   const [assets, setAssets] = useState<Asset[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const { activeToken } = useAuth()
 
+  // Reloaded whenever the active credential changes, so the overview always matches it
   useEffect(() => {
+    let current = true
+    setError('')
     getAssets()
-      .then(setAssets)
-      .catch(e => setError(e instanceof ApiError ? e.message : 'Failed to load'))
-      .finally(() => setLoading(false))
-  }, [])
+      .then(data => { if (current) setAssets(data) })
+      .catch(e => {
+        if (!current) return
+        setAssets([])
+        setError(e instanceof ApiError ? e.message : 'Failed to load')
+      })
+      .finally(() => { if (current) setLoading(false) })
+    return () => { current = false }
+  }, [activeToken])
 
   if (loading) return <PageSpinner />
 
@@ -71,8 +81,9 @@ export function Dashboard() {
           <div>
             <p className="font-semibold text-amber-900">Internal Use Only</p>
             <p className="mt-1 text-sm text-amber-800">
-              This platform facilitates internal review of AI-extracted legal information.
-              All data shown here is for compliance review purposes only and does not constitute
+              This platform facilitates internal review of legal information taken from issuer documents,
+              entered manually or extracted by AI. All data shown here is for compliance review purposes
+              only and does not constitute
               legal advice, regulatory certification, or investment guidance.
               Consult qualified legal counsel before any legal conclusions.
             </p>
@@ -80,8 +91,10 @@ export function Dashboard() {
         </div>
       </div>
 
+      <HowToRead />
+
       {error && (
-        <div className="rounded-lg bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">
+        <div role="alert" className="rounded-lg bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">
           {error}
         </div>
       )}
@@ -210,5 +223,62 @@ export function Dashboard() {
         </div>
       </div>
     </div>
+  )
+}
+
+// What an evaluator needs to read the application correctly (Stage 10C-1, GRANT_DEMO.md). Each
+// point states what a feature establishes and what it does not.
+const HOW_TO_READ: { title: string; text: string }[] = [
+  {
+    title: 'The problem',
+    text: 'A tokenized real-world asset on Stellar carries legal rights that are defined off-chain, in the ' +
+      "issuer's documents. Institutions need to see which rights a token carries and where each statement comes from.",
+  },
+  {
+    title: 'A Legal Passport',
+    text: "An asset's approved legal claims (ownership, income, voting, redemption, transfer restrictions, " +
+      'jurisdiction, insolvency), each with its source document version, cited page and exact quotation, the ' +
+      'reviewer approvals behind it, and its Stellar evidence commitment. Institutions read it with an API key.',
+  },
+  {
+    title: 'Page-grounded verification',
+    text: 'The server checks that each quotation appears word for word on the cited page of that exact document ' +
+      'version. This proves only that the text is there. It does not prove that a claim is legally valid, ' +
+      'enforceable, or that anyone owns anything.',
+  },
+  {
+    title: 'Human review',
+    text: "Claims start as unapproved drafts. An issuer attestation is the issuer's own statement; an independent " +
+      'legal review is given separately by another reviewer. Both are internal attestations bound to the exact ' +
+      'document version and evidence: any later change makes them stale. Neither is a legal opinion.',
+  },
+  {
+    title: 'Stellar Testnet anchoring',
+    text: "The SHA-256 digest of a passport's evidence manifest can be recorded on Stellar Testnet. It is shown as " +
+      'verified only when Stellar Horizon itself returns that transaction, from the trusted account, carrying the ' +
+      'same digest. A local record, a pending transaction or an unreachable network is never shown as verified. ' +
+      'New assets are not anchored. Testnet only; Mainnet anchoring is not supported.',
+  },
+  {
+    title: 'Experimental',
+    text: 'AI extraction is experimental: it can be disabled on a server and has not been verified against a real ' +
+      'model. Claims can be entered manually from the stored page text instead. This is not a production service.',
+  },
+]
+
+function HowToRead() {
+  return (
+    <section aria-labelledby="how-to-read-heading" data-testid="how-to-read"
+             className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <h3 id="how-to-read-heading" className="font-semibold text-slate-900">How to read this application</h3>
+      <dl className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {HOW_TO_READ.map(item => (
+          <div key={item.title}>
+            <dt className="text-sm font-medium text-slate-800">{item.title}</dt>
+            <dd className="mt-1 text-xs leading-relaxed text-slate-600">{item.text}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   )
 }

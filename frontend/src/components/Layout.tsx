@@ -1,6 +1,76 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useAuth } from '../AuthContext'
+import { useServerInfo } from '../serverInfo'
+
+const ROLE_LABELS: Record<string, string> = {
+  platform_admin: 'Platform Operator',
+  issuer_reviewer: 'Issuer Reviewer',
+  independent_legal_reviewer: 'Independent Legal Reviewer',
+}
+
+// The page title for every route; anything else is a page that does not exist
+export function pageTitle(pathname: string): string {
+  const p = pathname.replace(/\/+$/, '') || '/'
+  if (p === '/') return 'Dashboard'
+  if (/^\/assets\/[^/]+\/documents\/[^/]+\/extractions\/[^/]+$/.test(p)) return 'Extraction Detail'
+  if (/^\/assets\/[^/]+$/.test(p)) return 'Asset Detail'
+  if (p === '/assets') return 'Asset Registry'
+  if (p === '/passport') return 'Legal Passport'
+  if (p === '/api-docs') return 'API Reference'
+  return 'Page Not Found'
+}
+
+// A read-only showcase or synthetic dataset, as the server declares it (Stage 10C-1, GRANT_DEMO.md)
+function DeploymentBanner() {
+  const info = useServerInfo()
+  if (!info || (!info.read_only && !info.synthetic_data)) return null
+  return (
+    <div role="note" data-testid="deployment-banner" className="border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs text-amber-900">
+      {info.read_only && <span className="font-semibold">Read-only showcase: nothing can be created or changed on this server. </span>}
+      {info.synthetic_data && 'All assets, documents, reviewers and institutions shown here are synthetic and fictional. '}
+      Evidence anchoring uses Stellar Testnet only. This is not a production service, and nothing shown here is legal advice.
+    </div>
+  )
+}
+
+// Whom the server says the credential belongs to (Stage 10B-2); never the credential itself
+function AuthStatus() {
+  const { identity, apiKey } = useAuth()
+  let text: ReactNode
+  switch (identity.state) {
+    case 'none':
+      text = 'Not signed in'
+      break
+    case 'checking':
+      text = 'Checking credential…'
+      break
+    case 'signed_in':
+      text = (
+        <>
+          <span className="block text-slate-200">Signed in as {identity.user.display_name}</span>{' '}
+          <span className="block">
+            {ROLE_LABELS[identity.user.role] ?? identity.user.role}
+            {' · '}
+            {identity.user.scope === 'global' ? 'all issuers' : `issuers: ${identity.user.issuer_ids.join(', ')}`}
+          </span>
+        </>
+      )
+      break
+    case 'rejected':
+      text = identity.status === 401 ? 'Credential not accepted' : `Credential refused (HTTP ${identity.status})`
+      break
+    case 'unavailable':
+      text = 'Credential could not be checked: the server is not reachable'
+      break
+  }
+  return (
+    <div role="status" aria-live="polite" data-testid="auth-status" className="mb-2 px-3 text-xs text-slate-400">
+      {text}
+      {apiKey && <span className="block">Institutional API key set (checked on passport lookup)</span>}
+    </div>
+  )
+}
 
 const nav = [
   {
@@ -45,17 +115,19 @@ function CredentialsPanel({ open, onClose }: { open: boolean; onClose: () => voi
   const { userToken, apiKey, setUserToken, setApiKey } = useAuth()
   if (!open) return null
   return (
-    <div className="absolute bottom-16 left-0 right-0 mx-3 rounded-lg bg-slate-800 p-4 shadow-xl ring-1 ring-white/10">
+    <div className="absolute bottom-full left-0 right-0 mx-3 mb-2 rounded-lg bg-slate-800 p-4 shadow-xl ring-1 ring-white/10">
       <div className="mb-3 flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Credentials</span>
-        <button onClick={onClose} className="text-slate-400 hover:text-white">
+        <button onClick={onClose} aria-label="Close credentials" className="text-slate-400 hover:text-white">
           <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
             <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
           </svg>
         </button>
       </div>
-      <label className="mb-1 block text-xs text-slate-400">User Token (Bearer)</label>
+      <label htmlFor="credential-user-token" className="mb-1 block text-xs text-slate-400">User Token (Bearer)</label>
       <input
+        id="credential-user-token"
+        aria-describedby="credential-storage-note"
         type="password"
         value={userToken}
         onChange={e => setUserToken(e.target.value)}
@@ -63,8 +135,10 @@ function CredentialsPanel({ open, onClose }: { open: boolean; onClose: () => voi
         autoComplete="off"
         className="mb-3 w-full rounded bg-slate-700 px-3 py-1.5 text-xs text-white placeholder-slate-500 outline-none ring-1 ring-slate-600 focus:ring-indigo-500"
       />
-      <label className="mb-1 block text-xs text-slate-400">Institutional API Key</label>
+      <label htmlFor="credential-api-key" className="mb-1 block text-xs text-slate-400">Institutional API Key</label>
       <input
+        id="credential-api-key"
+        aria-describedby="credential-storage-note"
         type="password"
         value={apiKey}
         onChange={e => setApiKey(e.target.value)}
@@ -72,6 +146,7 @@ function CredentialsPanel({ open, onClose }: { open: boolean; onClose: () => voi
         autoComplete="off"
         className="w-full rounded bg-slate-700 px-3 py-1.5 text-xs text-white placeholder-slate-500 outline-none ring-1 ring-slate-600 focus:ring-indigo-500"
       />
+      <p id="credential-storage-note" className="mt-2 text-xs text-slate-500">Kept for this browser tab only.</p>
     </div>
   )
 }
@@ -82,16 +157,8 @@ export function Layout() {
   const { userToken, apiKey } = useAuth()
   const hasCredentials = userToken || apiKey
 
-  const title = (() => {
-    const p = location.pathname
-    if (p === '/') return 'Dashboard'
-    if (p.startsWith('/assets') && p.split('/').length === 3) return 'Asset Detail'
-    if (p.startsWith('/assets')) return 'Asset Registry'
-    if (p.startsWith('/passport')) return 'Legal Passport'
-    if (p.startsWith('/api-docs')) return 'API Reference'
-    if (p.includes('/extractions/')) return 'Extraction Detail'
-    return 'RWA Legal Passport'
-  })()
+  const title = pageTitle(location.pathname)
+  useEffect(() => { document.title = `${title} · RWA Legal Passport` }, [title])
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
@@ -136,9 +203,11 @@ export function Layout() {
 
         {/* Credentials toggle */}
         <div className="relative border-t border-slate-800 p-3">
+          <AuthStatus />
           <CredentialsPanel open={credOpen} onClose={() => setCredOpen(false)} />
           <button
             onClick={() => setCredOpen(o => !o)}
+            aria-expanded={credOpen}
             className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
           >
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
@@ -163,6 +232,7 @@ export function Layout() {
             </span>
           </div>
         </header>
+        <DeploymentBanner />
 
         {/* Content */}
         <main className="flex-1 overflow-y-auto p-6">

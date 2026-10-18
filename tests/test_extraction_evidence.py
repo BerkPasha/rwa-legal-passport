@@ -470,7 +470,8 @@ async def test_existing_extraction_fields_are_unchanged(
     client: AsyncClient, async_db: AsyncSession, created_extraction: dict, issuer_headers: dict
 ):
     extraction_keys = {"id", "document_id", "version_id", "status", "ai_model", "disclaimer",
-                       "extraction_timestamp", "created_at", "claims", "approval_state"}
+                       "extraction_timestamp", "created_at", "claims", "approval_state",
+                       "source"}  # Stage 10B-3: one additive field; the existing ones are unchanged
     claim_keys = {"id", "extraction_id", "field_name", "value", "is_unknown", "source_page",
                   "supporting_passage", "created_at"}
     eid = created_extraction["id"]

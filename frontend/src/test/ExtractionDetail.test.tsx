@@ -19,6 +19,7 @@ function extraction(overrides: Partial<LegalExtraction>): LegalExtraction {
     version_id: 'ver-001',
     status: 'approved',
     ai_model: 'mock-v1',
+    source: 'ai_service',
     disclaimer: 'Unverified AI draft.',
     extraction_timestamp: '2024-01-02T00:00:00Z',
     created_at: '2024-01-02T00:00:00Z',

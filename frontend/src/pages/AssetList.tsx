@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import { createAsset, getAssets, ApiError } from '../api'
 import type { Asset, AssetType, BlockchainNetwork, CreateAssetPayload } from '../types'
 import { PageSpinner } from '../components/Spinner'
+import { useAuth } from '../AuthContext'
+import { useReadOnly } from '../serverInfo'
 
 const EMPTY: CreateAssetPayload = {
   issuer_id: '',
@@ -38,15 +40,24 @@ export function AssetList() {
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState('')
 
+  const { activeToken } = useAuth()
+  // A read-only showcase refuses every write (Stage 10C-1); its actions are not offered
+  const readOnly = useReadOnly()
+
   const load = () => {
     setLoading(true)
+    setError('')
     getAssets()
       .then(setAssets)
-      .catch(e => setError(e instanceof ApiError ? e.message : 'Failed to load'))
+      .catch(e => {
+        setAssets([])
+        setError(e instanceof ApiError ? e.message : 'Failed to load')
+      })
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [])
+  // Reloaded whenever the active credential changes
+  useEffect(load, [activeToken])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -76,7 +87,7 @@ export function AssetList() {
             {assets.length} tokenized asset{assets.length !== 1 ? 's' : ''} registered
           </p>
         </div>
-        <button
+        {!readOnly && <button
           onClick={() => setShowForm(s => !s)}
           className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 active:bg-indigo-800"
         >
@@ -84,11 +95,11 @@ export function AssetList() {
             <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
           </svg>
           Register Asset
-        </button>
+        </button>}
       </div>
 
       {error && (
-        <div className="rounded-lg bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">{error}</div>
+        <div role="alert" className="rounded-lg bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">{error}</div>
       )}
 
       {/* Create form */}
@@ -112,8 +123,9 @@ export function AssetList() {
               </p>
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Network</label>
+              <label htmlFor="asset_network" className="mb-1 block text-sm font-medium text-slate-700">Network</label>
               <select
+                id="asset_network"
                 value={form.blockchain_network}
                 onChange={e => setForm(f => ({ ...f, blockchain_network: e.target.value as BlockchainNetwork }))}
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
@@ -123,8 +135,9 @@ export function AssetList() {
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Asset Type</label>
+              <label htmlFor="asset_type" className="mb-1 block text-sm font-medium text-slate-700">Asset Type</label>
               <select
+                id="asset_type"
                 value={form.asset_type}
                 onChange={e => setForm(f => ({ ...f, asset_type: e.target.value as AssetType }))}
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
@@ -135,8 +148,9 @@ export function AssetList() {
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Stellar Asset Code</label>
+              <label htmlFor="asset_code" className="mb-1 block text-sm font-medium text-slate-700">Stellar Asset Code</label>
               <input
+                id="asset_code"
                 required
                 value={form.stellar_asset_code}
                 onChange={e => setForm(f => ({ ...f, stellar_asset_code: e.target.value.toUpperCase() }))}
@@ -146,8 +160,9 @@ export function AssetList() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Issuer Public Key</label>
+              <label htmlFor="asset_issuer_key" className="mb-1 block text-sm font-medium text-slate-700">Issuer Public Key</label>
               <input
+                id="asset_issuer_key"
                 required
                 value={form.stellar_issuer_public_key}
                 onChange={e => setForm(f => ({ ...f, stellar_issuer_public_key: e.target.value }))}
@@ -157,8 +172,9 @@ export function AssetList() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Issuer Organization</label>
+              <label htmlFor="asset_organization" className="mb-1 block text-sm font-medium text-slate-700">Issuer Organization</label>
               <input
+                id="asset_organization"
                 required
                 value={form.issuer_organization_name}
                 onChange={e => setForm(f => ({ ...f, issuer_organization_name: e.target.value }))}
@@ -167,8 +183,9 @@ export function AssetList() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Jurisdiction</label>
+              <label htmlFor="asset_jurisdiction" className="mb-1 block text-sm font-medium text-slate-700">Jurisdiction</label>
               <input
+                id="asset_jurisdiction"
                 required
                 value={form.jurisdiction}
                 onChange={e => setForm(f => ({ ...f, jurisdiction: e.target.value }))}
@@ -177,7 +194,7 @@ export function AssetList() {
               />
             </div>
             {formError && (
-              <p className="col-span-2 text-sm text-red-600">{formError}</p>
+              <p role="alert" className="col-span-2 text-sm text-red-600">{formError}</p>
             )}
             <div className="col-span-2 flex justify-end gap-3">
               <button

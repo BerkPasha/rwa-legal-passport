@@ -326,12 +326,13 @@ async def test_evidence_is_bound_to_the_approved_document_version(
 
 
 async def test_page_text_hash_is_the_sha256_of_the_cited_pages_stored_text(
-    client: AsyncClient, created_document: dict, created_extraction: dict, legal_headers: dict, async_db: AsyncSession
+    client: AsyncClient, created_document: dict, created_extraction: dict, legal_headers: dict,
+    second_legal_headers: dict, async_db: AsyncSession,
 ):
     await _correct(client, created_extraction, F.ownership_nature, legal_headers,
                    corrected_value="Fee simple title held by the Trustee.",
                    corrected_source_page=2, corrected_passage=FEE_SIMPLE_QUOTE)
-    record = (await _approve(client, created_extraction["id"], legal_headers)).json()["evidence_record"]
+    record = (await _approve(client, created_extraction["id"], second_legal_headers)).json()["evidence_record"]
     pages = await _pages(async_db, created_document["current_version"]["id"])
     for c in record["claims"]:
         if not c["is_unknown"]:
@@ -417,12 +418,13 @@ async def test_approved_claim_modified_after_approval_makes_the_approval_stale(
 
 
 async def test_correction_identity_is_bound(
-    client: AsyncClient, created_extraction: dict, issuer_headers: dict, legal_headers: dict, async_db: AsyncSession
+    client: AsyncClient, created_extraction: dict, issuer_headers: dict, legal_headers: dict,
+    second_legal_headers: dict, async_db: AsyncSession,
 ):
     correction = await _correct(client, created_extraction, F.ownership_nature, legal_headers,
                                 corrected_value="Fee simple title held by the Trustee.",
                                 corrected_source_page=2, corrected_passage=FEE_SIMPLE_QUOTE)
-    a = (await _approve(client, created_extraction["id"], legal_headers)).json()
+    a = (await _approve(client, created_extraction["id"], second_legal_headers)).json()
     ownership = next(c for c in a["evidence_record"]["claims"] if c["field_name"] == "ownership_nature")
     assert ownership["correction_id"] == correction["id"]
     assert a["currency"]["is_current"] is True
@@ -776,8 +778,14 @@ async def test_reads_reviews_and_renewals_never_rewrite_historical_approvals(
         await client.get(_passport_url(created_asset), headers=inst_headers)
         assert (await client.post(f"/extractions/{blank_ex['id']}/review", headers=legal_headers)).status_code == 200
         assert (await _approve(client, blank_ex["id"], legal_headers)).status_code == 422
+        # A competing extraction of the approved version is refused and writes nothing (Stage 9B-5C)...
         other = await _extract(client, created_extraction["document_id"], issuer_headers)
-        assert (await _approve(client, other["id"], legal_headers)).status_code == 201
+        r = await _approve(client, other["id"], legal_headers)
+        assert r.status_code == 409 and r.json()["approval_refusal"] == "competing_extraction"
+        # ...a renewal on a new document version is approved
+        await _new_version(client, created_extraction["document_id"], make_source_pdf("Renewal."), issuer_headers)
+        renewal = await _extract(client, created_extraction["document_id"], issuer_headers)
+        assert (await _approve(client, renewal["id"], legal_headers)).status_code == 201
     finally:
         event.remove(engine, "before_cursor_execute", capture)
     writes = [s for s in statements if s.lstrip().upper().startswith(("UPDATE REVIEW_APPROVALS", "DELETE FROM REVIEW_APPROVALS"))]
@@ -846,14 +854,15 @@ async def test_binding_never_accepts_unverified_evidence(
 
 async def test_valid_workflow_binds_every_approval_in_format_2(
     client: AsyncClient, admin_client: AsyncClient, created_asset: dict, created_extraction: dict,
-    issuer_headers: dict, legal_headers: dict, inst_headers: dict, async_db: AsyncSession,
+    issuer_headers: dict, legal_headers: dict, second_legal_headers: dict, inst_headers: dict,
+    async_db: AsyncSession,
 ):
     eid = created_extraction["id"]
     assert (await client.post(f"/extractions/{eid}/review", headers=issuer_headers)).status_code == 200
     correction = await _correct(client, created_extraction, F.ownership_nature, legal_headers,
                                 corrected_value="Fee simple title held by the Trustee.",
                                 corrected_source_page=2, corrected_passage=FEE_SIMPLE_QUOTE)
-    legal = (await _approve(client, eid, legal_headers)).json()
+    legal = (await _approve(client, eid, second_legal_headers)).json()  # not the corrector
     issuer = (await _approve(client, eid, issuer_headers)).json()
     assert legal["evidence_record"] == issuer["evidence_record"]
     assert (await client.get(_passport_url(created_asset), headers=inst_headers)).status_code == 200

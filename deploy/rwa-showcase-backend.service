@@ -1,0 +1,50 @@
+# RWA Legal Passport - read-only grant showcase: backend service (DEPLOYMENT.md).
+#
+# PROPOSED CONFIGURATION, NOT TESTED WITH SYSTEMD: it was written on a machine without systemd. The
+# same command line and settings were rehearsed locally (scripts/e2e_run.py, environment "rehearsal").
+#
+# Layout on the server (one Linux host, behind deploy/Caddyfile):
+#   /srv/rwa-showcase/app      a checkout of this repository at the deployed commit (read-only)
+#   /srv/rwa-showcase/venv     a virtual environment with requirements.txt installed
+#   /srv/rwa-showcase/deploy   the deploy/ directory of a bundle from scripts/build_showcase.py:
+#                              showcase.env, data/ (database, PDFs, registry, anchoring account), www/
+
+[Unit]
+Description=RWA Legal Passport read-only showcase API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rwa-showcase
+Group=rwa-showcase
+WorkingDirectory=/srv/rwa-showcase/deploy
+EnvironmentFile=/srv/rwa-showcase/deploy/showcase.env
+# Loopback only: the reverse proxy is the only public listener. No server banner, no access log
+# (visitor addresses are not stored; security events log a hashed address only).
+ExecStart=/srv/rwa-showcase/venv/bin/python -m uvicorn app.main:app --app-dir /srv/rwa-showcase/app \
+    --host 127.0.0.1 --port 8000 --workers 1 \
+    --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-server-header --no-access-log
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the showcase never writes (READ_ONLY_MODE=true); its data is read-only to the service
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadOnlyPaths=/srv/rwa-showcase
+# SQLite may need to create a journal file next to the database even when only reading after an
+# unclean stop; if the service refuses to start for that reason, allow writes to the data directory:
+# ReadWritePaths=/srv/rwa-showcase/deploy/data
+
+[Install]
+WantedBy=multi-user.target

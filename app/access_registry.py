@@ -27,7 +27,7 @@ from threading import Lock
 from typing import Annotated, Any, Mapping, Optional
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints, ValidationError, model_validator
 
 from app.config import settings
 from app.enums import ReviewerRole, UserRole
@@ -123,6 +123,9 @@ class _StrictModel(BaseModel):
 class IssuerConfig(_StrictModel):
     id: IssuerId
     name: Annotated[str, StringConstraints(min_length=1, max_length=255)]
+    # The issuer has authorized sending the text of its documents to an external AI provider
+    # (Stage 10A-2, AI_EXTRACTION.md). Off unless set to true explicitly.
+    external_ai_processing: StrictBool = False
 
 
 class UserConfig(_StrictModel):
@@ -243,6 +246,11 @@ class AccessRegistry:
     def from_dict(cls, data: Any) -> "AccessRegistry":
         return cls.from_config(parse_access_config(data))
 
+    def allows_external_ai(self, issuer_id: Optional[str]) -> bool:
+        """True only if the issuer is registered and has set external_ai_processing (fail-closed)."""
+        issuer = self.issuers.get(issuer_id) if issuer_id else None
+        return issuer is not None and issuer.external_ai_processing
+
     def authenticate_user(self, token: str) -> Optional[Principal]:
         if not token:
             return None
@@ -330,9 +338,11 @@ def describe_registry(registry: AccessRegistry) -> str:
     for principal in registry.users_by_token_hash.values():
         roles[principal.role.value] = roles.get(principal.role.value, 0) + 1
     role_text = ", ".join(f"{k}={v}" for k, v in sorted(roles.items())) or "none"
+    external_ai = sum(1 for issuer in registry.issuers.values() if issuer.external_ai_processing)
     return (
         f"issuers={len(registry.issuers)} users=[{role_text}] "
-        f"institutional_clients={len(registry.clients_by_key_hash)}"
+        f"institutional_clients={len(registry.clients_by_key_hash)} "
+        f"issuers_authorizing_external_ai={external_ai}"
     )
 
 

@@ -1,5 +1,6 @@
-import React, { createContext, useCallback, useContext, useState } from 'react'
-import { setUserToken as setApiUserToken } from './api'
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { ApiError, getMe, setUserToken as setApiUserToken } from './api'
+import type { CurrentUser } from './types'
 
 interface AuthState {
   // Bearer token for internal endpoints (platform admin or reviewer)
@@ -8,9 +9,21 @@ interface AuthState {
   apiKey: string
 }
 
+// What the server says about the current Bearer credential (Stage 10B-2). Shown in the sidebar;
+// never the credential itself.
+export type Identity =
+  | { state: 'none' }
+  | { state: 'checking' }
+  | { state: 'signed_in'; user: CurrentUser }
+  | { state: 'rejected'; status: number }
+  | { state: 'unavailable' }
+
 interface AuthContextValue extends AuthState {
   setUserToken: (t: string) => void
   setApiKey: (k: string) => void
+  // The user token once typing has paused: pages reload their data when it changes
+  activeToken: string
+  identity: Identity
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -20,6 +33,8 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 const SESSION_KEY = 'rwa_passport_session_auth'
 // Key used by earlier versions, which persisted credentials in localStorage.
 export const LEGACY_LS_KEY = 'rwa_passport_auth'
+// Pause after the last keystroke before a typed credential is checked and data is reloaded
+export const CREDENTIAL_SETTLE_MS = 300
 
 const EMPTY: AuthState = { userToken: '', apiKey: '' }
 
@@ -59,6 +74,8 @@ function save(state: AuthState) {
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>(load)
+  const [activeToken, setActiveToken] = useState(state.userToken)
+  const [identity, setIdentity] = useState<Identity>({ state: state.userToken ? 'checking' : 'none' })
 
   const setUserToken = useCallback((userToken: string) => {
     setApiUserToken(userToken)
@@ -77,8 +94,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })
   }, [])
 
+  // A typed credential becomes active once typing pauses
+  useEffect(() => {
+    if (state.userToken === activeToken) return
+    const timer = setTimeout(() => setActiveToken(state.userToken), CREDENTIAL_SETTLE_MS)
+    return () => clearTimeout(timer)
+  }, [state.userToken, activeToken])
+
+  // The server says whom the active credential belongs to; an older answer is discarded
+  useEffect(() => {
+    if (!activeToken) {
+      setIdentity({ state: 'none' })
+      return
+    }
+    let current = true
+    setIdentity({ state: 'checking' })
+    getMe()
+      .then(user => { if (current) setIdentity({ state: 'signed_in', user }) })
+      .catch(e => {
+        if (current) setIdentity(e instanceof ApiError ? { state: 'rejected', status: e.status } : { state: 'unavailable' })
+      })
+    return () => { current = false }
+  }, [activeToken])
+
   return (
-    <AuthContext.Provider value={{ ...state, setUserToken, setApiKey }}>
+    <AuthContext.Provider value={{ ...state, setUserToken, setApiKey, activeToken, identity }}>
       {children}
     </AuthContext.Provider>
   )

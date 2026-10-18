@@ -1,5 +1,8 @@
+import { API_BASE } from '../api'
+import { useServerInfo } from '../serverInfo'
 export function ApiDocs() {
-  const base = 'http://localhost:8000'
+  const base = API_BASE
+  const info = useServerInfo()
 
   return (
     <div className="space-y-8">
@@ -18,12 +21,18 @@ export function ApiDocs() {
           </svg>
           <div>
             <p className="font-semibold text-indigo-900">Interactive API Documentation</p>
-            <p className="mt-0.5 text-sm text-indigo-700">
-              Full Swagger UI available at{' '}
-              <code className="rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-xs">{base}/docs</code>
-              {' '}and ReDoc at{' '}
-              <code className="rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-xs">{base}/redoc</code>
-            </p>
+            {info?.api_docs === false ? (
+              <p data-testid="api-docs-disabled" className="mt-0.5 text-sm text-indigo-700">
+                This server does not publish its interactive documentation. The routes are summarized below.
+              </p>
+            ) : (
+              <p className="mt-0.5 text-sm text-indigo-700">
+                Full Swagger UI available at{' '}
+                <code className="rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-xs">{base}/docs</code>
+                {' '}and ReDoc at{' '}
+                <code className="rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-xs">{base}/redoc</code>
+              </p>
+            )}
           </div>
         </div>
       </div>

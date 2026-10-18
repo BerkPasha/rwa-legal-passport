@@ -6,6 +6,35 @@ class BlockchainNetwork(str, enum.Enum):
     stellar_testnet = "stellar-testnet"
 
 
+class AnchorStatus(str, enum.Enum):
+    """
+    Stored state of a Stellar Testnet evidence anchor (STELLAR_ANCHORING.md).
+    'pending'   → signed and submitted (or submission outcome unknown); not yet confirmed
+    'confirmed' → the network reported the transaction as successful in a ledger
+    'failed'    → rejected or unsuccessful, or expired (time bounds passed) without inclusion
+    """
+    pending = "pending"
+    confirmed = "confirmed"
+    failed = "failed"
+
+
+class AnchorVerificationResult(str, enum.Enum):
+    """
+    Result of verifying a passport's evidence commitment against live Stellar network data.
+    Only 'verified' is positive. None of these values says anything about legal validity.
+    """
+    verified = "verified"                                  # on-chain commitment matches the current evidence
+    evidence_changed = "evidence_changed"                  # valid on-chain commitment of DIFFERENT (earlier) evidence
+    not_anchored = "not_anchored"                          # no commitment was ever recorded
+    pending = "pending"                                    # submitted, not yet confirmed
+    failed = "failed"                                      # the anchoring transaction failed or expired
+    onchain_mismatch = "onchain_mismatch"                  # the network transaction does not match the record
+    transaction_unavailable = "transaction_unavailable"    # the network no longer returns it (e.g. Testnet reset)
+    network_unavailable = "network_unavailable"            # the network could not be queried (or wrong network)
+    anchoring_not_configured = "anchoring_not_configured"  # no trusted anchoring account is configured
+    anchor_record_invalid = "anchor_record_invalid"        # the stored record fails its own digest check
+
+
 class AssetType(str, enum.Enum):
     real_estate = "real_estate"
     commodity = "commodity"
@@ -109,6 +138,18 @@ class ApprovalStaleReason(str, enum.Enum):
     evidence_not_verified = "evidence_not_verified"              # a quotation does not verify against the page text
     # Stage 9B-4, step 6 — reported by the passport only, which re-hashes the stored file on every read
     source_file_integrity_failed = "source_file_integrity_failed"  # stored PDF missing or not the approved bytes
+    # Stage 9B-5C — reported by the passport only; the approval records themselves stay as they are
+    competing_current_extractions = "competing_current_extractions"  # several extractions of one version are approved
+    self_reviewed_approval = "self_reviewed_approval"  # only a legal approval of the reviewer's own correction
+
+
+class ApprovalRefusal(str, enum.Enum):
+    """
+    Why an approval request was refused with 409 (Stage 9B-5C). A refused approval stores nothing.
+    """
+    duplicate_approval = "duplicate_approval"      # the reviewer already has a current approval of it
+    self_review = "self_review"                    # a legal reviewer approving their own latest correction
+    competing_extraction = "competing_extraction"  # another extraction of the version is already approved
 
 
 class ValueOrigin(str, enum.Enum):
@@ -118,6 +159,31 @@ class ValueOrigin(str, enum.Enum):
     """
     ai_extraction = "ai_extraction"              # no reviewer correction recorded; the AI's value, approved
     reviewer_correction = "reviewer_correction"  # a reviewer corrected the claim before approval
+    manual_entry = "manual_entry"                # entered manually by a user (no AI), uncorrected (Stage 10B-3)
+
+
+class ExtractionSource(str, enum.Enum):
+    """
+    How the claims of an extraction record were produced (Stage 10B-3). Derived from the stored
+    record (app/manual_claims.py), never chosen by a client.
+    """
+    ai_service = "ai_service"  # returned by the configured extraction service (an AI model or a test double)
+    manual = "manual"          # typed by an authorized user; no AI service was involved
+
+
+class ManualClaimRefusal(str, enum.Enum):
+    """
+    Why a manual claim request was refused (Stage 10B-3). A refused request stores nothing.
+    """
+    document_not_in_asset = "document_not_in_asset"      # the document belongs to another asset
+    version_not_in_document = "version_not_in_document"  # the version belongs to another document (or none)
+    version_not_current = "version_not_current"          # a newer version of the document exists
+    document_not_active = "document_not_active"
+    asset_not_active = "asset_not_active"
+    source_integrity_failed = "source_integrity_failed"  # the stored PDF does not match its version's records
+    duplicate_field = "duplicate_field"                  # one legal field given more than once
+    unknown_value = "unknown_value"                      # the value states "unknown": nothing is claimed
+    evidence_not_verified = "evidence_not_verified"      # a quotation is not verified on its cited page
 
 
 class ReviewerAttestationStatus(str, enum.Enum):
@@ -185,10 +251,30 @@ class VerificationLevel(str, enum.Enum):
                                          every source
     'independently_verified'           → at least one verified field, and every verified field is
                                          backed by a current independent reviewer approval
+    Legacy indicator, kept unchanged for compatibility. Read alone it can mislead: its floor
+    'issuer_attested' is also returned when no field is verified and when no current issuer
+    attestation exists at all (Stage 9B-5B, step 1). Use SourceVerificationStatus and the
+    attestation flags of the verification summary instead.
     """
     issuer_attested = "issuer_attested"
     partially_independently_verified = "partially_independently_verified"
     independently_verified = "independently_verified"
+
+
+class SourceVerificationStatus(str, enum.Enum):
+    """
+    Source-field coverage of a passport (Stage 9B-5B, step 1), independent of which approval roles
+    are present. A field counts only if its value is known, not conflicting and its quotation is
+    source-verified in every approved source. Proves source-text presence only: never legal
+    validity, institutional independence or policy satisfaction.
+    'no_source_verified_fields'  → no field is source-verified
+    'partially_source_verified'  → some fields are source-verified; at least one legal field is
+                                   unknown, conflicting, not verified or absent
+    'all_fields_source_verified' → every legal field (all of LegalFieldName) is source-verified
+    """
+    no_source_verified_fields = "no_source_verified_fields"
+    partially_source_verified = "partially_source_verified"
+    all_fields_source_verified = "all_fields_source_verified"
 
 
 class EvidenceStatus(str, enum.Enum):
@@ -209,3 +295,13 @@ class EvidenceStatus(str, enum.Enum):
     source_text_unavailable = "source_text_unavailable"      # no page records exist for the version
     source_text_invalid = "source_text_invalid"              # duplicate, missing or malformed page records
     not_applicable = "not_applicable"                        # the claim is unknown; no evidence is required
+
+
+class TextLayerStatus(str, enum.Enum):
+    """
+    Which pages of one document version have extractable text (Stage 10A-1). Derived from the
+    page texts stored at upload with the evidence check's own rule; OCR is not supported.
+    """
+    complete = "complete"  # every page has a text layer
+    partial = "partial"    # some pages have no text layer (e.g. scanned or blank pages)
+    none = "none"          # no page has a text layer: nothing can be quoted or verified without OCR

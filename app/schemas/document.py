@@ -3,7 +3,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.enums import DocumentStatus, DocumentType
+from app.enums import DocumentStatus, DocumentType, TextLayerStatus
 
 # What the served text is, and what it is not (Stage 9B-4, step 8)
 SOURCE_TEXT_ORIGIN = "pdf_text_layer_extracted_at_upload"
@@ -11,6 +11,11 @@ SOURCE_TEXT_NOTICE = (
     "Text extracted from the PDF text layer of exactly this document version when it was uploaded; "
     "pages without a text layer are empty (no OCR). It is evidence material only: it is not a legal "
     "interpretation and does not establish legal validity, ownership or enforceability."
+)
+TEXT_LAYER_NOTICE = (
+    "Page numbers are physical positions in the PDF (1 = first page), not printed page labels. A page "
+    "without a text layer (for example a scanned image or a blank page) has no extractable text: its "
+    "content cannot be quoted or verified, because OCR is not supported, and nothing is inferred for it."
 )
 
 
@@ -21,6 +26,25 @@ class DocumentPageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TextLayerSummary(BaseModel):
+    """
+    Which pages of one version have an extractable text layer (Stage 10A-1). Derived from the
+    page texts stored at upload, with the rule of the evidence check (a page whose text is empty
+    after normalization has no text layer); nothing is guessed or recognized.
+    """
+    status: TextLayerStatus
+    page_count: int
+    pages_with_text: int
+    pages_without_text: list[int] = Field(description="Page numbers without a text layer, ascending.")
+    requires_ocr: bool = Field(
+        description=(
+            "True if at least one page has no text layer. OCR is not supported: the content of those "
+            "pages cannot be extracted, quoted or verified."
+        )
+    )
+    notice: str = Field(default=TEXT_LAYER_NOTICE, description="What the summary means.")
+
+
 class DocumentVersionResponse(BaseModel):
     id: str
     document_id: str
@@ -29,6 +53,8 @@ class DocumentVersionResponse(BaseModel):
     file_size: int
     sha256_hash: str
     created_at: datetime
+    # None only if the version's page records are missing or invalid (Stage 10A-1)
+    text_layer: Optional[TextLayerSummary] = None
 
     model_config = ConfigDict(from_attributes=True)
 

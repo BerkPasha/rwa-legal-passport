@@ -93,7 +93,12 @@ class ClaimCorrectionRequest(BaseModel):
 
 
 class ApprovalRequest(BaseModel):
-    """Approval request — the approval type is derived automatically from the reviewer's role."""
+    """
+    Approval request — the approval type is derived automatically from the reviewer's role.
+    Unknown fields (e.g. reviewer_id or approval_type) are rejected with 422 rather than ignored:
+    the reviewer identity always comes from the authenticated token (Stage 9B-5C).
+    """
+    model_config = ConfigDict(extra="forbid")
     notes: Optional[str] = Field(None, max_length=1000)
 
 

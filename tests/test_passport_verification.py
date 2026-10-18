@@ -81,7 +81,10 @@ SUMMARY_KEYS = {"source_verified_field_count", "independently_attested_field_cou
                 "unknown_field_count", "conflicting_field_count", "reviewer_attestation_recorded",
                 "independent_reviewer_attestation_recorded", "evidence_scope", "verification_method",
                 "normalization_version", "legal_interpretation_status", "meaning"}
-LEGACY_LEVELS = {"issuer_attested", "partially_independently_verified", "independently_verified"}
+# Stage 9B-5B, step 1: additive fields (tests/test_passport_verification_status.py)
+STEP_9B5B1_TOP_KEYS = {"verification_status"}
+STEP_9B5B1_SUMMARY_KEYS = {"issuer_attestation_recorded", "legal_reviewer_approval_recorded"}
+LEGACY_LEVELS ={"issuer_attested", "partially_independently_verified", "independently_verified"}
 MOCK_KNOWN = {"income_rights", "jurisdiction", "ownership_nature", "transfer_restrictions"}
 MOCK_UNKNOWN = {"insolvency_provisions", "redemption_rights", "voting_rights"}
 DISTRIBUTIONS_QUOTE = "Distributions are paid within thirty days after the end of each calendar quarter"
@@ -409,13 +412,13 @@ async def test_altered_source_file_of_the_only_document_gives_409(
 
 async def test_reviewer_corrected_value_is_marked_and_the_ai_original_is_never_shown(
     client: AsyncClient, created_asset: dict, created_extraction: dict, issuer_headers: dict, legal_headers: dict,
-    inst_headers: dict,
+    second_legal_headers: dict, inst_headers: dict,
 ):
     ai_value = next(c["value"] for c in created_extraction["claims"] if c["field_name"] == "ownership_nature")
     await _correct(client, created_extraction, F.ownership_nature, legal_headers,
                    corrected_value="Fee simple title held by the Trustee.",
                    corrected_source_page=2, corrected_passage=FEE_SIMPLE_QUOTE)
-    await _approved(client, created_extraction, legal_headers)
+    await _approved(client, created_extraction, second_legal_headers)  # not the corrector (Stage 9B-5C)
 
     r = await client.get(_passport_url(created_asset), headers=inst_headers)
     body = r.json()
@@ -433,8 +436,8 @@ async def test_reviewer_corrected_value_is_marked_and_the_ai_original_is_never_s
 
 
 async def test_reviewer_marked_unknown_field_shows_no_leftover_value(
-    client: AsyncClient, created_asset: dict, created_extraction: dict, legal_headers: dict, inst_headers: dict,
-    async_db: AsyncSession,
+    client: AsyncClient, created_asset: dict, created_extraction: dict, legal_headers: dict,
+    second_legal_headers: dict, inst_headers: dict, async_db: AsyncSession,
 ):
     ai = next(c for c in created_extraction["claims"] if c["field_name"] == "jurisdiction")
     ai_value = ai["value"]
@@ -447,7 +450,7 @@ async def test_reviewer_marked_unknown_field_shows_no_leftover_value(
     # presents any of it
     await _exec(async_db, "UPDATE legal_claims SET value = :v, source_page = 1, supporting_passage = :p WHERE id = :c",
                 v=ai_value, p=ai["supporting_passage"], c=ai["id"])
-    await _approved(client, created_extraction, legal_headers)
+    await _approved(client, created_extraction, second_legal_headers)  # not the corrector (Stage 9B-5C)
     r = await client.get(_passport_url(created_asset), headers=inst_headers)
     jurisdiction = _rights(r.json())["jurisdiction"]
     assert jurisdiction["is_unknown"] is True and jurisdiction["value"] == "unknown"
@@ -542,7 +545,7 @@ async def test_response_serialization_and_backward_compatible_fields(
     client: AsyncClient, created_asset: dict, approved_extraction: dict, inst_headers: dict
 ):
     body = await _passport(client, created_asset, inst_headers)
-    assert set(body) == LEGACY_TOP_KEYS | {"verification_summary"}
+    assert set(body) == LEGACY_TOP_KEYS | {"verification_summary"} | STEP_9B5B1_TOP_KEYS
     assert body["verification_level"] in LEGACY_LEVELS
     for entry in body["legal_rights"]:
         assert set(entry) == LEGACY_ENTRY_KEYS | NEW_ENTRY_KEYS
@@ -551,7 +554,7 @@ async def test_response_serialization_and_backward_compatible_fields(
             assert set(source) == LEGACY_SOURCE_KEYS | NEW_SOURCE_KEYS
     for document in body["source_documents"]:
         assert set(document) == LEGACY_DOCUMENT_KEYS | NEW_DOCUMENT_KEYS
-    assert set(body["verification_summary"]) == SUMMARY_KEYS
+    assert set(body["verification_summary"]) == SUMMARY_KEYS | STEP_9B5B1_SUMMARY_KEYS
     assert body["verification_summary"]["evidence_scope"] == "source_text_presence_only"
     meaning = body["verification_summary"]["meaning"]
     for limit in ("enforceability", "ownership", "entitlement", "compliance", "solvency", "legal opinion"):
@@ -565,8 +568,9 @@ def test_openapi_documents_the_verification_semantics():
         assert entry[name].get("description"), name
     assert "not legal correctness" in entry["verified"]["description"]
     assert "not an independent legal opinion" in entry["independently_verified"]["description"]
-    assert set(schemas["VerificationSummary"]["properties"]) == SUMMARY_KEYS
-    assert set(schemas["ValueOrigin"]["enum"]) == {"ai_extraction", "reviewer_correction"}
+    assert set(schemas["VerificationSummary"]["properties"]) == SUMMARY_KEYS | STEP_9B5B1_SUMMARY_KEYS
+    # Stage 10B-3 added manual_entry (claims typed by a user); the existing values are unchanged
+    assert set(schemas["ValueOrigin"]["enum"]) == {"ai_extraction", "manual_entry", "reviewer_correction"}
     assert set(schemas["VerificationLevel"]["enum"]) == LEGACY_LEVELS  # no new level values
     passport_path = app.openapi()["paths"]["/passport/{network}/{asset_code}/{issuer_key}"]["get"]
     assert "does not establish enforceability" in passport_path["description"]

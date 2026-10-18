@@ -356,7 +356,7 @@ async def test_misspelled_evidence_fields_are_refused_not_ignored(
 
 async def test_known_claim_corrected_to_unknown_loses_all_active_evidence(
     client: AsyncClient, created_asset: dict, created_extraction: dict, legal_headers: dict, issuer_headers: dict,
-    inst_headers: dict, async_db: AsyncSession,
+    second_legal_headers: dict, inst_headers: dict, async_db: AsyncSession,
 ):
     ai = _claim(created_extraction, F.ownership_nature)
     r = await _patch(client, created_extraction, F.ownership_nature, legal_headers,
@@ -371,7 +371,8 @@ async def test_known_claim_corrected_to_unknown_loses_all_active_evidence(
     ex = (await client.get(f"/extractions/{created_extraction['id']}", headers=issuer_headers)).json()
     assert _claim(ex, F.ownership_nature)["evidence"]["status"] == "not_applicable"
 
-    approval = await _approve(client, created_extraction["id"], legal_headers)
+    # Another legal reviewer approves the correction (no one approves their own, Stage 9B-5C)
+    approval = await _approve(client, created_extraction["id"], second_legal_headers)
     assert approval.status_code == 201, approval.text
     record = next(c for c in approval.json()["evidence_record"]["claims"] if c["field_name"] == "ownership_nature")
     assert (record["value"], record["evidence_status"], record["page_text_sha256"], record["quotation_sha256"]) == (
@@ -526,7 +527,7 @@ async def test_approval_after_a_refused_correction_binds_only_verified_evidence(
 
 async def test_reapproval_after_a_valid_correction(
     client: AsyncClient, admin_client: AsyncClient, created_asset: dict, approved_extraction: dict,
-    issuer_headers: dict, legal_headers: dict, inst_headers: dict,
+    issuer_headers: dict, legal_headers: dict, second_legal_headers: dict, inst_headers: dict,
 ):
     eid = approved_extraction["id"]
     await admin_client.patch(f"/assets/{created_asset['id']}", json={"jurisdiction": "KY-CAYMAN"})
@@ -534,7 +535,7 @@ async def test_reapproval_after_a_valid_correction(
     correction = await _patch(client, approved_extraction, F.ownership_nature, legal_headers, corrected_value=NEW_VALUE,
                               is_unknown=False, corrected_source_page=2, corrected_passage=FEE_SIMPLE_QUOTE)
     assert correction.status_code == 200, correction.text
-    r = await _approve(client, eid, legal_headers)
+    r = await _approve(client, eid, second_legal_headers)  # not the reviewer who corrected it
     assert r.status_code == 201, r.text
     record = next(c for c in r.json()["evidence_record"]["claims"] if c["field_name"] == "ownership_nature")
     assert (record["value"], record["source_page"], record["supporting_passage"], record["correction_id"]) == (
@@ -550,7 +551,7 @@ async def test_reapproval_after_a_valid_correction(
 
 async def test_original_ai_evidence_stays_in_the_audit_trail_but_is_never_current(
     client: AsyncClient, created_asset: dict, created_extraction: dict, legal_headers: dict, issuer_headers: dict,
-    inst_headers: dict,
+    second_legal_headers: dict, inst_headers: dict,
 ):
     ai = _claim(created_extraction, F.ownership_nature)
     assert (await _patch(client, created_extraction, F.ownership_nature, legal_headers, corrected_value=NEW_VALUE,
@@ -562,7 +563,8 @@ async def test_original_ai_evidence_stays_in_the_audit_trail_but_is_never_curren
     current = _claim((await client.get(f"/extractions/{created_extraction['id']}", headers=issuer_headers)).json(),
                      F.ownership_nature)
     assert (current["value"], current["source_page"], current["supporting_passage"]) == (NEW_VALUE, 2, FEE_SIMPLE_QUOTE)
-    approval = await _approve(client, created_extraction["id"], legal_headers)
+    approval = await _approve(client, created_extraction["id"], second_legal_headers)  # not the corrector
+    assert approval.status_code == 201, approval.text
     assert ai["supporting_passage"] not in str(
         next(c for c in approval.json()["evidence_record"]["claims"] if c["field_name"] == "ownership_nature"))
     passport = await client.get(_passport_url(created_asset), headers=inst_headers)
@@ -593,11 +595,12 @@ async def test_old_approval_is_stale_when_the_effective_evidence_changes(
 
 
 async def test_snapshot_format_2_records_the_corrected_evidence(
-    client: AsyncClient, created_document: dict, created_extraction: dict, legal_headers: dict, async_db: AsyncSession
+    client: AsyncClient, created_document: dict, created_extraction: dict, legal_headers: dict,
+    second_legal_headers: dict, async_db: AsyncSession,
 ):
     correction = await _patch(client, created_extraction, F.ownership_nature, legal_headers, corrected_value=NEW_VALUE,
                               is_unknown=False, corrected_source_page=2, corrected_passage=FEE_SIMPLE_QUOTE)
-    approval = (await _approve(client, created_extraction["id"], legal_headers)).json()
+    approval = (await _approve(client, created_extraction["id"], second_legal_headers)).json()
     record = next(c for c in approval["evidence_record"]["claims"] if c["field_name"] == "ownership_nature")
     page_2 = (await async_db.execute(text("SELECT text_content FROM document_pages WHERE version_id = :v AND "
                                           "page_number = 2"), {"v": created_document["current_version"]["id"]})).scalar_one()
@@ -727,9 +730,11 @@ async def test_concurrent_corrections_and_approvals_keep_bound_evidence_verified
     file_db, client: AsyncClient, admin_client: AsyncClient, issuer_headers: dict, legal_headers: dict,
 ):
     asset = (await admin_client.post("/assets", json=_MERIDIAN_ASSET)).json()
-    doc = await _upload(client, asset["id"], make_source_pdf(), issuer_headers)
     outcomes = []
     for round_number, delay in enumerate((0.0, 0.15, 0.05, 0.3)):
+        # A document per round: a second approved extraction of one version would be refused
+        # (Stage 9B-5C, competing_extraction), which is not what this race is about
+        doc = await _upload(client, asset["id"], make_source_pdf(), issuer_headers, title=f"Prospectus {round_number}")
         ex = await _extract(client, doc["id"], issuer_headers)
 
         async def correct_after():
@@ -760,7 +765,7 @@ async def test_concurrent_corrections_and_approvals_keep_bound_evidence_verified
 
 async def test_legacy_correction_records_without_page_history_are_read_unchanged(
     client: AsyncClient, created_asset: dict, created_extraction: dict, legal_headers: dict, issuer_headers: dict,
-    inst_headers: dict, async_db: AsyncSession,
+    second_legal_headers: dict, inst_headers: dict, async_db: AsyncSession,
 ):
     ai = _claim(created_extraction, F.income_rights)
     # A record written before step 7: no page history columns set
@@ -780,7 +785,7 @@ async def test_legacy_correction_records_without_page_history_are_read_unchanged
     assert r.status_code == 200
     records = await _corrections(client, created_extraction["id"], issuer_headers)
     assert [x["page_history_recorded"] for x in records] == [False, True]
-    assert (await _approve(client, created_extraction["id"], legal_headers)).status_code == 201
+    assert (await _approve(client, created_extraction["id"], second_legal_headers)).status_code == 201
     rights = {e["field_name"]: e for e in (await client.get(_passport_url(created_asset), headers=inst_headers)).json()["legal_rights"]}
     assert rights["income_rights"]["value_origin"] == "reviewer_correction"  # a correction is on record
     assert rights["income_rights"]["verified"] is True
@@ -790,14 +795,16 @@ async def test_legacy_correction_records_without_page_history_are_read_unchanged
 
 
 async def test_passport_shows_the_corrected_value_with_its_own_verified_evidence(
-    client: AsyncClient, created_asset: dict, created_extraction: dict, legal_headers: dict, inst_headers: dict
+    client: AsyncClient, created_asset: dict, created_extraction: dict, legal_headers: dict,
+    second_legal_headers: dict, inst_headers: dict,
 ):
     assert (await _patch(client, created_extraction, F.ownership_nature, legal_headers, corrected_value=NEW_VALUE,
                          is_unknown=False, corrected_source_page=2,
                          corrected_passage=FEE_SIMPLE_QUOTE)).status_code == 200
     assert (await _patch(client, created_extraction, F.jurisdiction, legal_headers,
                          corrected_value="unknown", is_unknown=True)).status_code == 200
-    assert (await _approve(client, created_extraction["id"], legal_headers)).status_code == 201
+    # Another legal reviewer approves Bob's corrections (independent credit needs another reviewer)
+    assert (await _approve(client, created_extraction["id"], second_legal_headers)).status_code == 201
     body = (await client.get(_passport_url(created_asset), headers=inst_headers)).json()
     rights = {e["field_name"]: e for e in body["legal_rights"]}
     ownership = rights["ownership_nature"]

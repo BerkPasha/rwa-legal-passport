@@ -13,6 +13,13 @@ Meaning of the verification indicators (Stage 9B-4, step 6). Four things are kep
 Source-text verification proves only that the quotation exists in the source document. It does
 not establish legal enforceability, ownership authenticity, investor entitlement, regulatory
 compliance, issuer solvency or an independent legal opinion.
+
+Stage 9B-5B, step 1 (additive, mitigates issue B): the legacy verification_level can mislead when
+read alone, so the passport also reports verification_status (source-field coverage, regardless
+of approval roles) and, in verification_summary, issuer_attestation_recorded and
+legal_reviewer_approval_recorded (current approvals of the selected extractions). The legal
+reviewer role is recorded; organizational independence is not verified. No indicator states that
+an institutional approval policy is satisfied.
 """
 
 from datetime import datetime
@@ -26,7 +33,9 @@ from app.enums import (
     AssetStatus,
     BlockchainNetwork,
     EvidenceStatus,
+    ExtractionSource,
     ReviewerAttestationStatus,
+    SourceVerificationStatus,
     ValueOrigin,
     VerificationLevel,
 )
@@ -78,8 +87,9 @@ class RightSource(BaseModel):
     )
     value_origin: ValueOrigin = Field(
         description=(
-            "ai_extraction: approved as extracted by the AI; reviewer_correction: a reviewer corrected "
-            "the claim before approval (the value shown is the reviewer's, not the AI's)."
+            "ai_extraction: approved as extracted by the AI; manual_entry: approved as typed by a user "
+            "of the issuer, no AI involved (Stage 10B-3); reviewer_correction: a reviewer corrected the "
+            "claim before approval (the value shown is the reviewer's)."
         )
     )
     reviewer_attestation_status: ReviewerAttestationStatus = Field(
@@ -112,7 +122,8 @@ class LegalRightEntry(BaseModel):
         description=(
             "True only if verified is True and every source of the value has a current approval by an "
             "independent legal reviewer. An internal attestation on top of a source-verified quotation; "
-            "not an independent legal opinion. Issuer attestation alone never sets this."
+            "not an independent legal opinion. Issuer attestation alone never sets this, and neither "
+            "does a legal approval of the reviewer's own correction."
         )
     )
     conflict: bool = Field(
@@ -205,7 +216,12 @@ class ApprovedSourceDocument(DocumentReference):
 
 
 class ExcludedDocument(BaseModel):
-    """A document whose earlier approval is no longer current and is therefore not used."""
+    """
+    A document whose approval is not used: no longer current, its stored file failed its check,
+    several of its extractions are approved at once (competing_current_extractions, never resolved
+    by choosing one), or its only current approvals are legal approvals of the reviewer's own
+    correction (self_reviewed_approval).
+    """
     document_id: str = Field(description="Internal document identifier.")
     title: str = Field(description="Document title.")
     document_type: str = Field(description="Document category.")
@@ -213,9 +229,16 @@ class ExcludedDocument(BaseModel):
 
 
 class ExtractionMetadata(BaseModel):
-    """Technical metadata of the AI extraction."""
+    """Technical metadata of the extraction (AI or manual)."""
     extraction_id: str = Field(description="Internal extraction identifier.")
-    ai_model: str = Field(description="AI model that performed the extraction.")
+    ai_model: str = Field(
+        description="AI model that performed the extraction; for manually entered claims the marker "
+                    "'manual-entry (no AI model)'."
+    )
+    extraction_source: ExtractionSource = Field(
+        description="'manual': the claims were typed by a user, no AI was involved (Stage 10B-3); "
+                    "'ai_service': returned by the extraction service."
+    )
     extraction_timestamp: datetime = Field(description="AI extraction timestamp (UTC).")
     passport_version: int = Field(
         description=(
@@ -251,7 +274,28 @@ class VerificationSummary(BaseModel):
     independent_reviewer_attestation_recorded: bool = Field(
         description=(
             "At least one current approval is by an independent legal reviewer. Says nothing about "
-            "whether any field is verified; see independently_attested_field_count."
+            "whether any field is verified; see independently_attested_field_count. Legacy name: "
+            "always equal to legal_reviewer_approval_recorded; the reviewer's role is recorded, "
+            "organizational independence is not verified."
+        )
+    )
+    # ── Stage 9B-5B, step 1 ───────────────────────────────────────────────────
+    issuer_attestation_recorded: bool = Field(
+        description=(
+            "At least one contributing source document's selected extraction has a current issuer "
+            "attestation (approval type issuer_attestation). Stale, superseded and integrity-failed "
+            "approvals and approvals of other extractions are not counted; see "
+            "source_documents[].approval_types per document. The issuer's own statement: not "
+            "independent, not source verification and not a legal opinion."
+        )
+    )
+    legal_reviewer_approval_recorded: bool = Field(
+        description=(
+            "At least one contributing source document's selected extraction has a current approval "
+            "by a reviewer with the legal reviewer role (approval type legal_verification), counted "
+            "like issuer_attestation_recorded; a legal approval of the reviewer's own correction is "
+            "never counted. The role alone does not prove organizational independence, and the "
+            "approval is not a legal opinion or source verification."
         )
     )
     evidence_scope: str = Field(description="What a verified quotation proves: source_text_presence_only.")
@@ -278,11 +322,28 @@ class LegalPassportResponse(BaseModel):
             "verified field backed by a current independent reviewer approval), "
             "partially_independently_verified, or issuer_attested (no verified field independently "
             "backed — also when no field is verified at all; see verification_summary). Derived from "
-            "verified fields only; never a legal opinion."
+            "verified fields only; never a legal opinion. Legacy indicator, unchanged for "
+            "compatibility; misleading when read alone: issuer_attested is also returned when no "
+            "field is verified and when no current issuer attestation exists. Read "
+            "verification_status and verification_summary."
+        )
+    )
+    verification_status: SourceVerificationStatus = Field(
+        description=(
+            "Source-field coverage, regardless of which approval roles are present (Stage 9B-5B, "
+            "step 1): no_source_verified_fields, partially_source_verified (at least one legal field "
+            "is unknown, conflicting, not verified or absent) or all_fields_source_verified (every "
+            "legal field is source-verified). Source-text presence only: not legal validity, not "
+            "institutional independence and not approval-policy satisfaction."
         )
     )
     legal_rights: list[LegalRightEntry]
-    approvals: list[ApprovalEntry] = Field(description="Current approvals only.")
+    approvals: list[ApprovalEntry] = Field(
+        description=(
+            "Current approvals only, as counted by the passport: one per reviewer and extraction (the "
+            "latest), never a legal approval of the reviewer's own correction."
+        )
+    )
     source_document: DocumentReference = Field(
         description="Most recently approved current source document (see source_documents)."
     )

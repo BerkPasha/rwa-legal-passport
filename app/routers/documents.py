@@ -21,6 +21,10 @@ Secure upload / download (Stage 9B-2):
 - The version number is allocated atomically; unique indexes prevent collisions
   between concurrent uploads. A failed request leaves no file on disk.
 - Responses contain no internal filesystem paths.
+
+Text layer (Stage 10A-1): every version response carries `text_layer`, which pages have
+extractable text and which have none (scanned or blank pages; OCR is not supported). It is
+derived from the stored page records with the evidence check's rule; nothing is stored for it.
 """
 
 import asyncio
@@ -42,7 +46,7 @@ from app.auth import require_permission
 from app.authorization import get_asset_for_principal, get_document_for_principal
 from app.config import settings
 from app.db.session import get_db
-from app.enums import DocumentType
+from app.enums import DocumentType, TextLayerStatus
 from app.evidence import SourceDocumentText
 from app.models.document import Document, DocumentPage, DocumentVersion
 from app.permissions import Permission
@@ -52,6 +56,7 @@ from app.schemas.document import (
     DocumentTextResponse,
     DocumentVersionResponse,
     DocumentVersionTextResponse,
+    TextLayerSummary,
 )
 from app.services.pdf import (
     PdfLimits,
@@ -125,12 +130,12 @@ async def _process_upload(file: UploadFile, max_mb: int) -> _ValidatedUpload:
     # 3. Size check
     if len(content) > limit_bytes:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"File exceeds the {max_mb} MB limit.",
         )
     if not content:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="File is empty."
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="File is empty."
         )
 
     # 4. Magic byte check (the content-type header is not trusted)
@@ -143,7 +148,7 @@ async def _process_upload(file: UploadFile, max_mb: int) -> _ValidatedUpload:
     # 5. Truncated file check
     if not has_eof_marker(content):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="PDF appears incomplete or truncated (no %%EOF marker).",
         )
 
@@ -156,11 +161,11 @@ async def _process_upload(file: UploadFile, max_mb: int) -> _ValidatedUpload:
             timeout=limits.max_parse_seconds + 1.0,
         )
     except PdfValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.reason)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=exc.reason)
     except asyncio.TimeoutError:
         security_logger.warning("upload.pdf_parse_timeout")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="PDF processing exceeded the time limit.",
         )
 
@@ -170,6 +175,47 @@ async def _process_upload(file: UploadFile, max_mb: int) -> _ValidatedUpload:
         pages=pages,
         display_filename=display_filename,
     )
+
+
+def _text_layer(source: SourceDocumentText) -> Optional[TextLayerSummary]:
+    """Text-layer summary of one version's page records; None if they are missing or invalid."""
+    if not source.pages or source.problem is not None:
+        return None
+    page_count = len(source.pages)
+    without_text = list(source.pages_without_text)
+    if not without_text:
+        layer_status = TextLayerStatus.complete
+    elif len(without_text) == page_count:
+        layer_status = TextLayerStatus.none
+    else:
+        layer_status = TextLayerStatus.partial
+    return TextLayerSummary(
+        status=layer_status,
+        page_count=page_count,
+        pages_with_text=page_count - len(without_text),
+        pages_without_text=without_text,
+        requires_ocr=bool(without_text),
+    )
+
+
+async def _version_responses(
+    db: AsyncSession, versions: list[DocumentVersion]
+) -> list[DocumentVersionResponse]:
+    """Builds version responses with their text-layer summaries (one query for all page records)."""
+    records: dict[str, list[dict]] = {version.id: [] for version in versions}
+    if records:
+        rows = await db.execute(
+            select(DocumentPage.version_id, DocumentPage.page_number, DocumentPage.text_content)
+            .where(DocumentPage.version_id.in_(list(records)))
+        )
+        for version_id, page_number, text_content in rows.all():
+            records[version_id].append({"page_number": page_number, "text_content": text_content})
+    return [
+        DocumentVersionResponse.model_validate(version).model_copy(
+            update={"text_layer": _text_layer(SourceDocumentText.from_page_records(version.id, records[version.id]))}
+        )
+        for version in versions
+    ]
 
 
 async def _build_document_response(
@@ -194,7 +240,7 @@ async def _build_document_response(
         created_at=document.created_at,
         updated_at=document.updated_at,
         current_version=(
-            DocumentVersionResponse.model_validate(current_version)
+            (await _version_responses(db, [current_version]))[0]
             if current_version
             else None
         ),
@@ -411,7 +457,7 @@ async def upload_new_version(
         )
     await _commit_or_cleanup(db, storage, version.stored_path)
     await db.refresh(version)
-    return version
+    return (await _version_responses(db, [version]))[0]
 
 
 @router.get(
@@ -431,7 +477,7 @@ async def list_versions(
         .where(DocumentVersion.document_id == document_id)
         .order_by(DocumentVersion.version_number)
     )
-    return result.scalars().all()
+    return await _version_responses(db, list(result.scalars().all()))
 
 
 @router.get(

@@ -12,6 +12,26 @@ export type DocumentType =
   | 'other'
 export type ExtractionStatus = 'draft' | 'under_review' | 'approved'
 export type ReviewerRole = 'issuer_reviewer' | 'independent_legal_reviewer'
+
+// GET /auth/me: who the Bearer credential belongs to (never the credential itself)
+export interface CurrentUser {
+  user_id: string
+  display_name: string
+  role: 'platform_admin' | ReviewerRole
+  scope: 'global' | 'issuers'
+  issuer_ids: string[]
+  permissions: string[]
+}
+
+// GET /ai/status (Stage 10B-2): whether AI extraction can run on this server; never a key
+export interface AIStatus {
+  available: boolean
+  status: string
+  external_processor: string | null
+  model: string | null
+  supported_models: string[]
+  message: string
+}
 export type ApprovalType = 'issuer_attestation' | 'legal_verification'
 
 // Stage 9B-3: approvals are bound to an exact document version, evidence and asset information,
@@ -31,10 +51,18 @@ export type ApprovalStaleReason =
   | 'source_text_changed'
   | 'evidence_not_verified'
   | 'source_file_integrity_failed'
+  // Stage 9B-5C (reported by the passport only)
+  | 'competing_current_extractions'
+  | 'self_reviewed_approval'
 export type VerificationLevel =
   | 'issuer_attested'
   | 'partially_independently_verified'
   | 'independently_verified'
+// Stage 9B-5B step 1: source-field coverage only, whatever the approval roles; never legal validity
+export type SourceVerificationStatus =
+  | 'no_source_verified_fields'
+  | 'partially_source_verified'
+  | 'all_fields_source_verified'
 export type DocumentStatus = 'active' | 'archived'
 
 // Stage 9B-4: result of the backend's deterministic quotation check. Only 'verified' is positive,
@@ -57,7 +85,10 @@ export type CorrectionRejection =
   | 'unknown_with_evidence'
   | 'unknown_value_for_known_claim'
   | 'evidence_not_verified'
-export type ValueOrigin = 'ai_extraction' | 'reviewer_correction'
+export type ValueOrigin = 'ai_extraction' | 'manual_entry' | 'reviewer_correction'
+
+// How an extraction record's claims were produced (Stage 10B-3); set by the server
+export type ExtractionSource = 'ai_service' | 'manual'
 export type ReviewerAttestationStatus = 'independent_reviewer_attested' | 'issuer_attested' | 'not_applicable'
 
 // ── Domain models ─────────────────────────────────────────────────────────────
@@ -101,6 +132,42 @@ export interface DocumentVersion {
   file_size: number
   sha256_hash: string
   created_at: string
+  // Which pages have extractable text (Stage 10A-1); null if the page records are unusable
+  text_layer?: TextLayerSummary | null
+}
+
+// OCR is not supported: a page without a text layer can never be quoted or verified
+export type TextLayerStatus = 'complete' | 'partial' | 'none'
+
+// 428 / 409 / 422 body of POST /documents/{id}/extractions with an external AI provider (Stage 10A-2):
+// what the request would send, without any document text. Nothing has been sent yet.
+export interface ExternalProcessingSummary {
+  processor: string
+  model: string
+  document_id: string
+  version_id: string
+  version_number: number
+  page_count: number
+  pages_without_text: number[]
+  input_chars: number
+  max_input_chars: number
+  max_pages: number
+  max_output_tokens: number
+}
+
+// The caller's explicit confirmation for exactly one request and one document version
+export interface ExtractionConfirmation {
+  confirm_external_processing: true
+  version_id: string
+}
+
+export interface TextLayerSummary {
+  status: TextLayerStatus
+  page_count: number
+  pages_with_text: number
+  pages_without_text: number[]
+  requires_ocr: boolean
+  notice: string
 }
 
 export interface DocumentPage {
@@ -158,11 +225,27 @@ export interface LegalExtraction {
   version_id: string
   status: ExtractionStatus
   ai_model: string
+  source: ExtractionSource
   disclaimer: string
   extraction_timestamp: string
   created_at: string
   claims: LegalClaim[]
   approval_state: ExtractionApprovalState
+}
+
+// A legal claim typed by a user from one document version (Stage 10B-3). The server checks the
+// quotation against the stored text of the cited page before anything is stored.
+export interface ManualClaimInput {
+  field_name: string
+  value: string
+  source_page: number
+  supporting_passage: string
+}
+
+export interface ManualExtractionPayload {
+  asset_id: string
+  version_id: string
+  claims: ManualClaimInput[]
 }
 
 export interface ExtractionApprovalState {
@@ -248,6 +331,91 @@ export interface BlockchainStatus {
   disclaimer: string
 }
 
+// ── Stellar Testnet evidence anchoring (STELLAR_ANCHORING.md) ─────────────────
+// An anchor proves that the anchoring account recorded a digest at a ledger time. It is never a
+// legal approval, and it never makes a passport field "independently verified".
+
+export type AnchorStatus = 'pending' | 'confirmed' | 'failed'
+export type AnchorVerificationResult =
+  | 'verified'
+  | 'evidence_changed'
+  | 'not_anchored'
+  | 'pending'
+  | 'failed'
+  | 'onchain_mismatch'
+  | 'transaction_unavailable'
+  | 'network_unavailable'
+  | 'anchoring_not_configured'
+  | 'anchor_record_invalid'
+
+// Response of POST/GET /assets/{id}/stellar-anchors (internal API)
+export interface StellarAnchor {
+  id: string
+  asset_id: string
+  network: BlockchainNetwork
+  manifest_schema: string
+  manifest_version: number
+  manifest_digest: string
+  anchor_account: string
+  data_name: string
+  transaction_hash: string | null
+  status: AnchorStatus
+  attempts: number
+  ledger: number | null
+  ledger_closed_at: string | null
+  valid_until: string | null
+  failure_reason: string | null
+  requested_by: string
+  created_at: string
+  updated_at: string
+  horizon_transaction_url: string | null
+  disclaimer: string
+}
+
+export interface AnchorVerification {
+  asset: {
+    identifier_type: string
+    network: BlockchainNetwork
+    asset_code: string
+    asset_issuer: string
+    stellar_asset_type: string
+  }
+  manifest_schema: string
+  manifest_version: number
+  current_passport_available: boolean
+  current_manifest_digest: string | null
+  anchor: {
+    manifest_digest: string
+    transaction_hash: string | null
+    status: AnchorStatus
+    anchor_account: string
+    data_name: string
+    ledger: number | null
+    ledger_closed_at: string | null
+    anchored_at: string
+    horizon_transaction_url: string | null
+  } | null
+  evidence_matches_anchor: boolean
+  onchain: {
+    checked: boolean
+    network_passphrase_matches: boolean | null
+    transaction_found: boolean | null
+    successful: boolean | null
+    source_account_matches: boolean | null
+    memo_matches: boolean | null
+    operation_matches: boolean | null
+    ledger: number | null
+    ledger_closed_at: string | null
+    error: string | null
+  }
+  result: AnchorVerificationResult
+  verified: boolean
+  committed_manifest_canonical_json: string | null
+  meaning: string
+  disclaimer: string
+  checked_at: string
+}
+
 export interface PassportRightSource {
   document_id: string
   document_title: string
@@ -269,7 +437,12 @@ export interface VerificationSummary {
   unknown_field_count: number
   conflicting_field_count: number
   reviewer_attestation_recorded: boolean
+  // Legacy name of legal_reviewer_approval_recorded (always equal)
   independent_reviewer_attestation_recorded: boolean
+  // Stage 9B-5B step 1: current approvals of the selected extractions; the legal reviewer role
+  // does not prove organizational independence
+  issuer_attestation_recorded: boolean
+  legal_reviewer_approval_recorded: boolean
   evidence_scope: string
   verification_method: string
   normalization_version: number
@@ -289,7 +462,9 @@ export interface LegalPassport {
     status: AssetStatus
   }
   // Issuer attestation is never reported as independent legal verification
+  // Legacy: misleading alone (issuer_attested is also the floor without any verified field)
   verification_level: VerificationLevel
+  verification_status: SourceVerificationStatus
   legal_rights: {
     field_name: string
     value: string
@@ -346,6 +521,7 @@ export interface LegalPassport {
   extraction_metadata: {
     extraction_id: string
     ai_model: string
+    extraction_source: ExtractionSource
     extraction_timestamp: string
     passport_version: number
     effective_date: string
@@ -389,4 +565,11 @@ export interface ExpectedClaimState {
 
 export interface ApprovalPayload {
   notes?: string
+}
+
+// The public deployment policies of the server (GET /health, Stage 10C-1)
+export interface ServerInfo {
+  read_only: boolean
+  synthetic_data: boolean
+  api_docs: boolean
 }

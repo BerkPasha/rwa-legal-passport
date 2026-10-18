@@ -85,8 +85,8 @@ async def test_pre_9b3_database_is_refused_at_startup_without_changes(tmp_path: 
     engine = create_async_engine(f"sqlite+aiosqlite:///{db.as_posix()}")
     try:
         async with engine.begin() as conn:
-            # Same sequence as the application startup (app.main.lifespan)
-            await conn.run_sync(Base.metadata.create_all)
+            # Same sequence as the application startup (app.main.lifespan): the check runs first and
+            # raises, so create_all is never reached and nothing (not even a newer table) is created
             with pytest.raises(SchemaOutOfDateError) as exc:
                 await conn.run_sync(verify_schema_columns)
     finally:

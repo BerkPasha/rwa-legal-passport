@@ -48,6 +48,7 @@ from app.access_registry import Principal, security_logger
 from app.approval_integrity import (
     ExtractionContext,
     bind_approval,
+    competing_current_extractions,
     evaluate_approval,
     load_extraction_context,
     lock_extraction_for_update,
@@ -58,6 +59,7 @@ from app.auth import require_permission
 from app.authorization import get_extraction_for_principal
 from app.db.session import get_db
 from app.enums import (
+    ApprovalRefusal,
     ApprovalType,
     AssetStatus,
     DocumentStatus,
@@ -112,7 +114,7 @@ _UNVERIFIED_EVIDENCE = (
 def _evidence_rejection(failures: list[ApprovalEvidenceFailure]) -> JSONResponse:
     """422 in the usual {"detail": str} form, plus the failed claims and their evidence status."""
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={
             "detail": _UNVERIFIED_EVIDENCE.format(
                 fields=", ".join(sorted({f.field_name for f in failures}))
@@ -188,12 +190,39 @@ def _correction_rejection(refused: RefusedCorrection) -> JSONResponse:
     """422 in the usual {"detail": str} form, plus the rule and the evidence status."""
     status_value = refused.evidence_status.value if refused.evidence_status else None
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={
             "detail": _CORRECTION_REJECTED[refused.rule].format(status=status_value),
             "correction_rule": refused.rule.value,
             "evidence_status": status_value,
         },
+    )
+
+
+_APPROVAL_REFUSED = {
+    ApprovalRefusal.duplicate_approval: (
+        "Approval rejected — you already have a current approval of this extraction. A repeated "
+        "approval by the same reviewer is never recorded as a further approval."
+    ),
+    ApprovalRefusal.self_review: (
+        "Approval rejected — you made the most recent correction of at least one claim of this "
+        "extraction. A legal approval of one's own correction is not an independent review: another "
+        "legal reviewer must approve it."
+    ),
+    ApprovalRefusal.competing_extraction: (
+        "Approval rejected — another extraction of this document version already has a current "
+        "approval. Only one extraction per document version can be approved; a different "
+        "extraction can be approved once that approval is no longer current (e.g. a new document "
+        "version)."
+    ),
+}
+
+
+def _approval_refusal(refusal: ApprovalRefusal, **details) -> JSONResponse:
+    """409 in the usual {"detail": str} form, plus the machine-readable refusal (Stage 9B-5C)."""
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"detail": _APPROVAL_REFUSED[refusal], "approval_refusal": refusal.value, **details},
     )
 
 
@@ -479,7 +508,14 @@ async def correct_claim(
         "text must match the stored page text; otherwise the approval is refused with 409 and "
         "`source_integrity_failure` names the reason. The evidence is bound in snapshot format 2 "
         "(`evidence_record`): per claim the evidence status and the SHA-256 of the cited page "
-        "text and of the quotation."
+        "text and of the quotation.\n\n"
+        "Refused with 409 and `approval_refusal` (Stage 9B-5C), storing nothing: "
+        "`duplicate_approval` (the reviewer already has a current approval of this extraction), "
+        "`self_review` (a legal reviewer made the most recent correction of a claim; another legal "
+        "reviewer must approve), `competing_extraction` (another extraction of this document version "
+        "already has a current approval; `competing_extraction_ids` names it). The request body "
+        "accepts `notes` only; the reviewer identity and approval type always come from the "
+        "authenticated token."
     ),
 )
 async def approve_extraction(
@@ -520,14 +556,36 @@ async def approve_extraction(
         if ctx.asset.status != AssetStatus.active.value:
             await db.rollback()
             raise _conflict("Approvals are not accepted while the asset is not active.")
+        summary = summarize_extraction(ctx)
         if (
             extraction.status == ExtractionStatus.approved.value
-            and summarize_extraction(ctx).state != ExtractionApprovalState.current
+            and summary.state != ExtractionApprovalState.current
         ):
             await db.rollback()
             raise _conflict(
                 "The existing approval is no longer current; start a re-review before approving again."
             )
+
+        # Stage 9B-5C: one current approval per reviewer, no legal approval of one's own
+        # correction, and one approved extraction per document version (issue B5)
+        refusal, details = None, {}
+        if any(a.reviewer_id == reviewer.user_id for a in summary.current_approvals):
+            refusal = ApprovalRefusal.duplicate_approval
+        elif reviewer_role is ReviewerRole.independent_legal_reviewer and ctx.authored_latest_correction(
+            reviewer.user_id
+        ):
+            refusal = ApprovalRefusal.self_review
+        else:
+            competing = await competing_current_extractions(db, extraction)
+            if competing:
+                refusal, details = ApprovalRefusal.competing_extraction, {"competing_extraction_ids": competing}
+        if refusal is not None:
+            await db.rollback()
+            security_logger.warning(
+                "approval.rejected_%s extraction=%s user=%s%s", refusal.value, extraction_id, reviewer.user_id,
+                f" competing={','.join(details['competing_extraction_ids'])}" if details else "",
+            )
+            return _approval_refusal(refusal, **details)
 
         # The page text loaded under the lock must be what the stored PDF contains (step 5)
         integrity = source_integrity_failure(stored_pdf, ctx.extraction_version, ctx.source)

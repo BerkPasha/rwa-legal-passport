@@ -1,5 +1,8 @@
 import type {
+  AIStatus,
+  AnchorVerification,
   Asset,
+  CurrentUser,
   ApprovalPayload,
   BlockchainStatus,
   ClaimCorrectionPayload,
@@ -7,11 +10,15 @@ import type {
   Document,
   DocumentVersion,
   DocumentVersionText,
+  ExtractionConfirmation,
   LegalExtraction,
   LegalPassport,
+  ManualExtractionPayload,
   ReviewApproval,
   ReviewCorrection,
   ReviewStatus,
+  ServerInfo,
+  StellarAnchor,
 } from './types'
 
 export const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
@@ -78,19 +85,31 @@ async function request<T>(
     headers: { ...headers, ...(init.headers as Record<string, string> | undefined) },
   })
 
-  if (!res.ok) {
-    let detail = res.statusText
-    let body: unknown = null
-    try {
-      body = await res.json()
-      detail = detailMessage((body as { detail?: unknown } | null)?.detail, detail)
-    } catch { /* ignore */ }
-    throw new ApiError(res.status, detail, body)
-  }
+  if (!res.ok) throw await apiError(res)
 
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }
+
+async function apiError(res: Response): Promise<ApiError> {
+  let detail = res.statusText
+  let body: unknown = null
+  try {
+    body = await res.json()
+    detail = detailMessage((body as { detail?: unknown } | null)?.detail, detail)
+  } catch { /* ignore */ }
+  return new ApiError(res.status, detail, body)
+}
+
+// ── Identity and AI availability (Stage 10B-2) ───────────────────────────────
+
+// Who the Bearer credential belongs to; the response never contains the credential
+export const getMe = (): Promise<CurrentUser> => request('/auth/me')
+
+// Public: whether the server is a read-only showcase of synthetic data (Stage 10C-1); no credential is sent
+export const getServerInfo = (): Promise<ServerInfo> => request('/health', {}, {}, 'none')
+
+export const getAiStatus = (): Promise<AIStatus> => request('/ai/status')
 
 // ── Assets ────────────────────────────────────────────────────────────────────
 
@@ -123,6 +142,17 @@ export const uploadDocument = (
 export const getDocumentVersions = (docId: string): Promise<DocumentVersion[]> =>
   request(`/documents/${encodeURIComponent(docId)}/versions`)
 
+// The current version's PDF (GET /documents/{id}/download): the server re-verifies its SHA-256 and
+// enforces the caller's issuer scope. The bytes stay in memory; the caller compares them with the
+// version's recorded hash before offering them to the user (Stage 10B-2).
+export async function downloadDocument(docId: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}/download`, {
+    headers: userToken ? { Authorization: `Bearer ${userToken}` } : {},
+  })
+  if (!res.ok) throw await apiError(res)
+  return res.blob()
+}
+
 // Text of exactly one version (Stage 9B-4, step 8). The backend never falls back to another
 // version; versionId, when given, must identify that same version (otherwise 409).
 export const getDocumentVersionText = (
@@ -136,8 +166,17 @@ export const getDocumentVersionText = (
 
 // ── Extractions ───────────────────────────────────────────────────────────────
 
-export const triggerExtraction = (docId: string): Promise<LegalExtraction> =>
-  request(`/documents/${docId}/extractions`, { method: 'POST' })
+// With an external AI provider the first call answers 428 with what would be sent; the user's
+// confirmation is then sent with the second call (Stage 10A-2)
+export const triggerExtraction = (docId: string, confirmation?: ExtractionConfirmation): Promise<LegalExtraction> =>
+  request(`/documents/${docId}/extractions`, {
+    method: 'POST',
+    ...(confirmation ? { body: JSON.stringify(confirmation) } : {}),
+  })
+
+// Manual legal claims (Stage 10B-3): no AI is involved; the result is an unapproved draft
+export const createManualExtraction = (docId: string, payload: ManualExtractionPayload): Promise<LegalExtraction> =>
+  request(`/documents/${encodeURIComponent(docId)}/manual-extractions`, { method: 'POST', body: JSON.stringify(payload) })
 
 export const getExtractions = (docId: string): Promise<LegalExtraction[]> =>
   request(`/documents/${docId}/extractions`)
@@ -208,5 +247,32 @@ export const getLegalPassport = (
   apiKey: string,
 ): Promise<LegalPassport> =>
   request(`/passport/${network}/${assetCode}/${issuerKey}`, {}, {
+    'X-API-Key': apiKey,
+  }, 'none')
+
+// ── Stellar Testnet evidence anchoring (STELLAR_ANCHORING.md) ─────────────────
+// The server signs with its own Testnet account; no signing credential ever reaches the browser.
+
+export const getAnchorVerification = (assetId: string): Promise<AnchorVerification> =>
+  request(`/assets/${encodeURIComponent(assetId)}/stellar-anchors/verification`)
+
+export const getStellarAnchors = (assetId: string): Promise<StellarAnchor[]> =>
+  request(`/assets/${encodeURIComponent(assetId)}/stellar-anchors`)
+
+// Submits a Stellar Testnet transaction (unless this evidence is already anchored)
+export const createStellarAnchor = (assetId: string): Promise<StellarAnchor> =>
+  request(`/assets/${encodeURIComponent(assetId)}/stellar-anchors`, { method: 'POST' })
+
+export const refreshStellarAnchor = (assetId: string, anchorId: string): Promise<StellarAnchor> =>
+  request(`/assets/${encodeURIComponent(assetId)}/stellar-anchors/${encodeURIComponent(anchorId)}/refresh`,
+    { method: 'POST' })
+
+export const getPassportAnchorVerification = (
+  network: string,
+  assetCode: string,
+  issuerKey: string,
+  apiKey: string,
+): Promise<AnchorVerification> =>
+  request(`/passport/${network}/${assetCode}/${issuerKey}/stellar-anchor`, {}, {
     'X-API-Key': apiKey,
   }, 'none')

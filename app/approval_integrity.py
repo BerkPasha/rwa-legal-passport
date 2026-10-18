@@ -28,7 +28,13 @@ read by comparing its binding with the live state (`evaluate_approval`):
   page-text hashes against the live page text (source_text_changed), the recorded statuses,
   quotation hashes and method against an independent re-computation (evidence_not_verified),
   and the snapshot's version identity against the approval's own binding
-  (binding_integrity_failed).
+  (binding_integrity_failed);
+- every bound approval also (Stage 9B-5C C1): its extraction, document, version id and version
+  number against the live extraction, document and version loaded from the database; a
+  mismatch or missing context is binding_integrity_failed. A record forged together with a
+  recomputed digest is thus refuted whenever it names another extraction, document or version.
+  A complete forgery for another extraction (snapshot and digests rewritten) is not detectable
+  without a keyed signature.
 
 Legacy approvals are read as they are; nothing is upgraded or rewritten:
 - without a binding (before Stage 9B-3): never current (unbound_legacy_approval);
@@ -199,12 +205,29 @@ class ExtractionContext:
     source: ExtractionSourceText
     # claim id → id of its most recent reviewer correction
     latest_corrections: dict[str, str]
+    # claim id → reviewer who made its most recent correction (Stage 9B-5C, self-review)
+    latest_correction_authors: dict[str, str] = field(default_factory=dict)
 
     @property
     def version_is_current(self) -> bool:
         return (
             self.current_version is not None
             and self.extraction.version_id == self.current_version.id
+        )
+
+    def authored_latest_correction(self, reviewer_id: str) -> bool:
+        """The reviewer made the most recent correction of at least one claim of this extraction."""
+        return reviewer_id in self.latest_correction_authors.values()
+
+    def is_self_reviewed(self, approval: ReviewApproval) -> bool:
+        """
+        A legal approval of the reviewer's own latest correction (Stage 9B-5C). Such an approval is
+        refused today; a historical one is kept as recorded but never counted as independent review.
+        An issuer attestation of the issuer's own correction is the issuer's own statement anyway.
+        """
+        return (
+            approval.approval_type == ApprovalType.legal_verification.value
+            and self.authored_latest_correction(approval.reviewer_id)
         )
 
 
@@ -262,7 +285,7 @@ async def load_extraction_context(db: AsyncSession, extraction_id: str) -> Extra
     ).scalars().all()
     corrections = (
         await db.execute(
-            select(ReviewCorrection.claim_id, ReviewCorrection.id)
+            select(ReviewCorrection.claim_id, ReviewCorrection.id, ReviewCorrection.reviewer_id)
             .where(ReviewCorrection.extraction_id == extraction.id)
             .order_by(ReviewCorrection.created_at, ReviewCorrection.id)
         )
@@ -276,8 +299,35 @@ async def load_extraction_context(db: AsyncSession, extraction_id: str) -> Extra
         claims=list(claims),
         approvals=list(approvals),
         source=await load_extraction_source_text(db, extraction),
-        latest_corrections={claim_id: correction_id for claim_id, correction_id in corrections},
+        latest_corrections={claim_id: correction_id for claim_id, correction_id, _ in corrections},
+        latest_correction_authors={claim_id: reviewer_id for claim_id, _, reviewer_id in corrections},
     )
+
+
+async def competing_current_extractions(db: AsyncSession, extraction: LegalExtraction) -> list[str]:
+    """
+    Other extractions of the same document version with at least one current approval (Stage
+    9B-5C, issue B5). Only one extraction per document version may be approved: an approval of a
+    competing extraction is refused, and the passport never chooses between several.
+    """
+    candidates = (
+        await db.execute(
+            select(LegalExtraction.id)
+            .join(ReviewApproval, ReviewApproval.extraction_id == LegalExtraction.id)
+            .where(
+                LegalExtraction.document_id == extraction.document_id,
+                LegalExtraction.version_id == extraction.version_id,
+                LegalExtraction.id != extraction.id,
+            )
+            .group_by(LegalExtraction.id)
+            .order_by(LegalExtraction.id)
+        )
+    ).scalars().all()
+    competing = []
+    for candidate_id in candidates:
+        if summarize_extraction(await load_extraction_context(db, candidate_id)).current_approvals:
+            competing.append(candidate_id)
+    return competing
 
 
 # ── Evidence snapshot format 2 (Stage 9B-4, step 5) ──────────────────────────
@@ -506,6 +556,24 @@ def _evidence_not_verified(fmt: int | None, snapshot, approval: ReviewApproval, 
     return False
 
 
+def _identity_matches(approval: ReviewApproval, ctx: ExtractionContext) -> bool:
+    """
+    Stage 9B-5C C1: the approval's own identity columns name exactly the live context — this
+    extraction, its document and its version (id and number). The context comes from the
+    database relations (extraction → document → version), never from the approval or a caller's
+    claim, and missing context never matches. The bound claims are compared separately
+    (evidence_changed) by their claim ids.
+    """
+    version = ctx.extraction_version  # None unless the version belongs to ctx.document
+    return (
+        version is not None
+        and approval.extraction_id == ctx.extraction.id
+        and approval.document_id == ctx.document.id == ctx.extraction.document_id
+        and approval.document_version_id == ctx.extraction.version_id == version.id
+        and approval.document_version_number == version.version_number
+    )
+
+
 def evaluate_approval(approval: ReviewApproval, ctx: ExtractionContext) -> ApprovalCurrency:
     """Compares one approval's binding with the live state. All failing checks are reported."""
     if any(getattr(approval, name) is None for name in _BINDING_FIELDS):
@@ -515,7 +583,7 @@ def evaluate_approval(approval: ReviewApproval, ctx: ExtractionContext) -> Appro
     reasons: list[ApprovalStaleReason] = []
     if (
         not _binding_intact(approval)
-        or approval.document_version_id != ctx.extraction.version_id
+        or not _identity_matches(approval, ctx)
         or fmt is None
         or (fmt == EVIDENCE_SNAPSHOT_FORMAT and not _matches_binding(snapshot, approval))
     ):

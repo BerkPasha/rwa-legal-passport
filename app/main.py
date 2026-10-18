@@ -9,8 +9,16 @@ from app.config import settings
 from app.db.base import Base
 from app.db.schema_check import verify_schema_columns
 from app.db.session import engine
-from app.middleware import BodySizeLimitMiddleware
-from app.routers import assets, auth, blockchain, documents, extractions, health, passport, review
+from app.middleware import (
+    ApiDocsGateMiddleware,
+    BodySizeLimitMiddleware,
+    ClientRateLimitMiddleware,
+    ReadOnlyModeMiddleware,
+    SecurityHeadersMiddleware,
+)
+from app.routers import (
+    ai_status, assets, auth, blockchain, documents, extractions, health, passport, review, stellar_anchors,
+)
 
 # ── OpenAPI tag metadata ──────────────────────────────────────────────────────
 _tags_metadata = [
@@ -78,6 +86,29 @@ async def lifespan(app: FastAPI):
             "access_config.missing path=%s — all protected endpoints will be denied. "
             "See ACCESS_CONTROL.md", access_path,
         )
+    # AI extraction provider (Stage 10A-2): the state only, never the key
+    if settings.ai_provider == "anthropic":
+        if settings.anthropic_api_key_configured:
+            security_logger.info(
+                "ai_provider.enabled provider=anthropic model=%s max_output_tokens=%d max_input_chars=%d "
+                "max_pages=%d — document text is sent only for issuers with external_ai_processing and "
+                "after per-request confirmation",
+                settings.ai_model, settings.ai_max_output_tokens, settings.ai_max_input_chars, settings.ai_max_pages,
+            )
+        else:
+            security_logger.warning(
+                "ai_provider.not_configured provider=anthropic — ANTHROPIC_API_KEY is missing or malformed; "
+                "extraction requests are refused and nothing is sent"
+            )
+    else:
+        security_logger.info("ai_provider.disabled — no document text is sent to any AI service")
+    # Showcase deployment policies (Stage 10C-1, GRANT_DEMO.md)
+    security_logger.info(
+        "deployment.policies read_only_mode=%s api_docs_enabled=%s synthetic_data_notice=%s "
+        "client_rate_limit_per_minute=%d auth_failure_limit_per_minute=%d",
+        settings.read_only_mode, settings.api_docs_enabled, settings.synthetic_data_notice,
+        settings.client_rate_limit_per_minute, settings.auth_failure_limit_per_minute,
+    )
     legacy = settings.legacy_credentials_configured
     if legacy:
         security_logger.warning(
@@ -85,10 +116,12 @@ async def lifespan(app: FastAPI):
             "follow the migration steps in ACCESS_CONTROL.md.", ",".join(legacy),
         )
 
-    # On startup, create the SQLite tables (if missing) and check for missing columns
+    # On startup, check the existing tables for missing columns FIRST (an out-of-date database is
+    # refused before anything is created in it), then create the tables that are missing (e.g.
+    # the empty stellar_anchors table on an up-to-date database)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(verify_schema_columns)
+        await conn.run_sync(Base.metadata.create_all)
     yield
 
 
@@ -106,10 +139,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Body size limit: cuts off oversized requests with 413 before the multipart body is
-# buffered (and also before authentication). Added before CORS, so that CORS stays the
-# outermost layer and the 413 response also carries the CORS headers.
+# Middleware order, innermost first (each one added wraps the ones before it):
+# - read-only mode and the API docs gate (Stage 10C-1) refuse before authentication or a route;
+# - the body size limit cuts off oversized requests with 413 before the multipart body is
+#   buffered (and also before authentication);
+# - the per-client rate limits (Stage 10C-2) refuse with 429 before any of them;
+# - CORS wraps them, so that their 403/404/413 responses carry the CORS headers too;
+# - the security headers are outermost and reach every response, preflights included.
+app.add_middleware(ReadOnlyModeMiddleware)
+app.add_middleware(ApiDocsGateMiddleware)
 app.add_middleware(BodySizeLimitMiddleware)
+app.add_middleware(ClientRateLimitMiddleware)
 
 # CORS: configured origins only (wildcards are rejected in Settings).
 # Credentials travel in headers; cookies are not used, hence allow_credentials=False.
@@ -121,17 +161,22 @@ app.add_middleware(
     allow_credentials=False,
     max_age=600,
 )
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(assets.router)
 app.include_router(documents.router)
 app.include_router(extractions.router)
+app.include_router(ai_status.router)
 app.include_router(review.router)
 app.include_router(blockchain.router)
 app.include_router(passport.router)
+app.include_router(stellar_anchors.router)
 
 
 @app.get("/", include_in_schema=False)
 async def root():
+    if not settings.api_docs_enabled:
+        return {"message": f"{settings.app_name} v{settings.app_version}."}
     return {"message": f"{settings.app_name} v{settings.app_version} — visit /docs."}

@@ -488,12 +488,14 @@ async def test_reviewer_correction_with_invalid_evidence_is_rejected(
 
 
 async def test_reviewer_correction_with_authentic_evidence_is_approved(
-    client: AsyncClient, created_extraction: dict, issuer_headers: dict, legal_headers: dict
+    client: AsyncClient, created_extraction: dict, issuer_headers: dict, legal_headers: dict,
+    second_legal_headers: dict,
 ):
     await _correct(client, created_extraction, F.ownership_nature, legal_headers,
                    corrected_value="Fee simple title held by the Trustee.",
                    corrected_source_page=2, corrected_passage=FEE_SIMPLE_QUOTE)
-    r = await _approve(client, created_extraction["id"], legal_headers)
+    # Another legal reviewer approves the correction (no one approves their own, Stage 9B-5C)
+    r = await _approve(client, created_extraction["id"], second_legal_headers)
     assert r.status_code == 201, r.text
     approved = next(c for c in r.json()["evidence_snapshot"] if c["field_name"] == "ownership_nature")
     assert (approved["value"], approved["source_page"], approved["supporting_passage"]) == (
@@ -695,8 +697,14 @@ async def test_evidence_is_recomputed_at_approval_time(
         {"p": FABRICATED, "e": created_extraction["id"]},
     )
     await async_db.commit()
+    # Client-supplied verification statements are refused outright (unknown fields, Stage 9B-5C)...
     r = await _approve(client, created_extraction["id"], issuer_headers,
                        body={"evidence": "verified", "status": "verified", "verified": True, "claims": shown["claims"]})
+    assert r.status_code == 422
+    assert {e["loc"][-1] for e in r.json()["detail"]} == {"evidence", "status", "verified", "claims"}
+    assert {e["type"] for e in r.json()["detail"]} == {"extra_forbidden"}
+    # ...and an ordinary request is checked against the stored claims, not the earlier response
+    r = await _approve(client, created_extraction["id"], issuer_headers)
     assert _failures(r) == {"ownership_nature": "not_found"}
     assert await _approval_count(async_db) == 0
 
@@ -943,14 +951,15 @@ async def test_random_races_never_create_an_approval_without_verified_bound_evid
 
 async def test_valid_workflows_keep_working_with_the_gate(
     client: AsyncClient, admin_client: AsyncClient, created_asset: dict, created_document: dict,
-    created_extraction: dict, issuer_headers: dict, legal_headers: dict, inst_headers: dict,
+    created_extraction: dict, issuer_headers: dict, legal_headers: dict, second_legal_headers: dict,
+    inst_headers: dict,
 ):
     eid = created_extraction["id"]
     assert (await client.post(f"/extractions/{eid}/review", headers=issuer_headers)).status_code == 200
     await _correct(client, created_extraction, F.ownership_nature, legal_headers,
                    corrected_value="Fee simple title held by the Trustee.",
                    corrected_source_page=2, corrected_passage=FEE_SIMPLE_QUOTE)
-    assert (await _approve(client, eid, legal_headers)).status_code == 201
+    assert (await _approve(client, eid, second_legal_headers)).status_code == 201
     assert (await _approve(client, eid, issuer_headers)).status_code == 201
     body = (await client.get(_passport_url(created_asset), headers=inst_headers)).json()
     assert body["source_documents"][0]["approval_types"] == ["issuer_attestation", "legal_verification"]

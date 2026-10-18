@@ -33,15 +33,23 @@ class ExtractionSourceText:
 
 async def load_extraction_source_text(db: AsyncSession, extraction: LegalExtraction) -> ExtractionSourceText:
     """Loads the live page records of exactly extraction.version_id (bypassing session caches)."""
+    return await load_version_source_text(db, extraction.document_id, extraction.version_id)
+
+
+async def load_version_source_text(db: AsyncSession, document_id: str, version_id: str) -> ExtractionSourceText:
+    """
+    Loads the live page records of exactly version_id, which must belong to document_id. Shared
+    by stored extractions and by manual claims before they are stored (Stage 10B-3).
+    """
     fresh = {"populate_existing": True}
     version = (
         await db.execute(
-            select(DocumentVersion).where(DocumentVersion.id == extraction.version_id).execution_options(**fresh)
+            select(DocumentVersion).where(DocumentVersion.id == version_id).execution_options(**fresh)
         )
     ).scalar_one_or_none()
-    if version is None or version.document_id != extraction.document_id:
+    if version is None or version.document_id != document_id:
         # No fallback to any other version or document: without authoritative text, nothing verifies
-        return ExtractionSourceText(SourceDocumentText(extraction.version_id, ()), None)
+        return ExtractionSourceText(SourceDocumentText(version_id, ()), None)
     pages = (
         await db.execute(
             select(DocumentPage)

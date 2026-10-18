@@ -18,6 +18,7 @@ from app.enums import (
     ApprovalType,
     EvidenceStatus,
     ExtractionApprovalState,
+    ExtractionSource,
     ExtractionStatus,
     LegalFieldName,
 )
@@ -53,6 +54,68 @@ class AIExtractionResult(BaseModel):
     ai_model: str
     extraction_timestamp: datetime
     disclaimer: str          # disclaimer — always populated
+
+
+# ── API request schema ───────────────────────────────────────────────────────
+
+
+class ExtractionRequest(BaseModel):
+    """
+    Optional body of POST /documents/{id}/extractions (Stage 10A-2). With an external AI
+    provider, the caller must confirm, for this request, that the text of the current document
+    version is sent to that provider; the 428 response says exactly what would be sent.
+    """
+    confirm_external_processing: StrictBool = False
+    # The version the caller confirmed (the 428 response's version_id); another current version
+    # gives 409, so a confirmation never covers text the caller was not shown
+    version_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ManualClaimInput(BaseModel):
+    """
+    One legal claim typed by a user (Stage 10B-3): its legal field (the claim category), the
+    claim itself, and the exact quotation from the cited page that supports it. The quotation is
+    checked on the server against the stored page text; nothing in the request is trusted.
+    """
+    field_name: LegalFieldName
+    value: str = Field(..., min_length=1, max_length=2000, description="The claim, in the user's words.")
+    # Strict: lax coercion would read true as page 1
+    source_page: StrictInt = Field(..., ge=1, description="Page of the document version that holds the quotation.")
+    supporting_passage: str = Field(
+        ..., min_length=1, max_length=2000,
+        description="Exact quotation from that page; never generated or completed by the server.",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ManualExtractionRequest(BaseModel):
+    """
+    Body of POST /documents/{document_id}/manual-extractions (Stage 10B-3). asset_id and
+    version_id name exactly what the user looked at: the document must belong to that asset, and
+    the version must be the document's current version.
+    """
+    asset_id: str = Field(..., min_length=1, max_length=64)
+    version_id: str = Field(..., min_length=1, max_length=64)
+    claims: list[ManualClaimInput] = Field(..., min_length=1, max_length=len(LegalFieldName))
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [{
+                "asset_id": "5f0c7d1e-0000-4000-8000-000000000001",
+                "version_id": "5f0c7d1e-0000-4000-8000-000000000002",
+                "claims": [{
+                    "field_name": "jurisdiction",
+                    "value": "Governed by the laws of the State of New York.",
+                    "source_page": 1,
+                    "supporting_passage": "This Trust Agreement is governed by the laws of the State of New York",
+                }],
+            }]
+        },
+    )
 
 
 # ── API response schemas (returned to the client) ────────────────────────────
@@ -123,6 +186,9 @@ class LegalExtractionResponse(BaseModel):
     # "draft" only — automatic approval is never applied
     status: ExtractionStatus
     ai_model: str
+    source: ExtractionSource = Field(
+        description="'manual' if the claims were typed by a user (no AI was involved), 'ai_service' otherwise."
+    )
     # Disclaimer shown in every response
     disclaimer: str
     extraction_timestamp: datetime

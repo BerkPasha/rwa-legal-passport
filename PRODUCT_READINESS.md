@@ -510,6 +510,7 @@ P0-4 is closed.
 - **Recommended resolution:**
   - keep `verification_level` unchanged now and point consumers to `verification_summary` (documented);
   - later, with approval, add an additive field (e.g. `attestation_level` with an explicit `no_verified_fields` value) and mark `verification_level` deprecated in its description, before any value change in a versioned API.
+- **Update (Stage 9B-5B step 1):** mitigated with additive fields; see §13.
 
 ### 12.6 Statements superseded by Stage 9B-4
 
@@ -626,6 +627,251 @@ No assertion was weakened. The language-policy fixture lines are unchanged: `tes
 - **G. Competition demo:** CONDITIONAL, on a real-browser smoke test, the unverified real-model output, and a commit or backup of the working tree.
 - **H. Production and institutional deployment:** FAIL (not ready), unchanged.
 - **Stage 9B-4 closure:** recommended once you approve it, with issue B accepted as a documented limitation. The stage is not closed automatically.
+
+## 13. Stage 9B-5B step 1 — truthful verification metadata (2026-10-17)
+
+Scope: issue B only (§12.5), with additive response fields (decision D7). No approval policy, quorum, reviewer deduplication, self-approval rule, withdrawal, policy registry, migration or authentication change.
+
+Five things are kept apart: issuer attestation, legal reviewer approval, source-field verification, actual institutional independence (never verified by this system) and approval-policy satisfaction (not implemented; no field claims it).
+
+| Field | Derived from | Meaning |
+|---|---|---|
+| `verification_status` | The served `legal_rights` (live quotation check) | `no_source_verified_fields`, `partially_source_verified` (at least one of the seven legal fields unknown, conflicting, not verified or absent) or `all_fields_source_verified`. Independent of approval roles |
+| `verification_summary.issuer_attestation_recorded` | Current approvals of the selected extractions | A current `issuer_attestation` exists on at least one served extraction |
+| `verification_summary.legal_reviewer_approval_recorded` | Same | A current `legal_verification` exists on at least one served extraction. The role does not prove organizational independence |
+
+- **Unchanged:** `verification_level` (enum, values and calculation), every existing field and value, source selection, error responses and request contract. `independent_reviewer_attestation_recorded` stays, always equal to `legal_reviewer_approval_recorded`.
+- **Counted:** current approvals only, of the extraction each document actually serves. Stale, superseded and integrity-failed approvals, and approvals of other extractions, are not counted. No historical record is rewritten or reinterpreted; everything is derived on each read.
+- **Not exposed:** reviewer identities, tokens, key hashes, approval ids, internal issuer ids.
+- **Residual risk:**
+  - Issue B is mitigated, not resolved. A legacy client that reads only `verification_level` can still overstate a passport.
+  - `all_fields_source_verified` means quotation presence for every field, not legal correctness.
+  - A party with database write access who recomputes the unkeyed digests can still forge approval types (limitation C).
+  - The review interface does not display the new fields yet (types only).
+- **Tests:** `tests/test_passport_verification_status.py`.
+
+## 14. Stage 9B-5C — approval attribution and B5 consolidation (2026-10-17)
+
+| Fix | Where | Behaviour |
+|---|---|---|
+| C1 attribution | `evaluate_approval` (`_identity_matches`) | An approval is current only for its own extraction, document, version id and number, compared with the live records; a mismatch or missing context is `binding_integrity_failed` |
+| B5 competing extraction | `approve_extraction` | 409 `competing_extraction` when another extraction of the version has a current approval |
+| B5 fail-closed passport | `_evaluate_asset` | Several current approved extractions of one document: excluded (`competing_current_extractions`), never resolved by the latest approval |
+| Self-review | `approve_extraction`, `_Source.approvals` | 409 `self_review`; historical self-reviewed legal approvals are kept but never counted (`self_reviewed_approval` if it is a document's only approval) |
+| Repeated approval | `approve_extraction`, `_Source.approvals` | 409 `duplicate_approval`; historical duplicates count once |
+| Request identity | `ApprovalRequest` | `notes` only; unknown fields are 422 |
+
+- **Not changed:**
+  - `verification_level` and its calculation;
+  - existing response fields;
+  - migrations: none;
+  - historical records: none rewritten.
+- **Additive:** two passport-only `ApprovalStaleReason` values and the 409 `approval_refusal` body.
+- **Deferred:**
+  - quorum or approval policy;
+  - withdrawal and revocation (they need a migration);
+  - verified reviewer affiliation;
+  - keyed signatures (limitation C).
+- **Interim:** an approved extraction is replaced only after its approval stops being current (new document version, asset change).
+- **Tests:** `tests/test_approval_attribution.py`, `tests/test_b5_approval_safety.py`.
+
+## 15. Stellar Testnet evidence anchoring (2026-10-17)
+
+Design and limits: [STELLAR_ANCHORING.md](STELLAR_ANCHORING.md).
+
+- **Implemented:**
+  - strict StrKey validation of issuer keys;
+  - a deterministic evidence manifest (schema v1) and its SHA-256 digest;
+  - one Testnet transaction per manifest (memo hash + `manage_data lp:<asset id>`), signed with `stellar-sdk` 16.1.0;
+  - idempotent, record-before-submit anchoring with pending, confirmed and failed states;
+  - read-only verification against live Horizon data (internal and institutional API);
+  - the additive `stellar_anchors` table.
+- **Live-verified on Stellar Testnet on 2026-10-17:**
+  - transaction `1687c0ddc4a85b07b3ec13e9064aa57a4556e8993b9ff78080b5ac9d628123d2`, ledger 5241718, from account `GADWA6F3V4BTB3M56BWUBRD5AJVX3WSVIGGWN5BQRTHFXKNUKHRWPDOT`;
+  - memo and data entry equal the manifest digest `5c760dba…d057`;
+  - result `verified`; a new document and a tampered claim both gave `evidence_changed`.
+- **Startup change:** the schema check now runs before table creation, so an out-of-date database is refused unchanged. Migration scripts 9B-3 and 9B-4 compare only the tables they govern.
+- **Not production:**
+  - Testnet resets remove anchors;
+  - one anchoring account per deployment;
+  - single-process sequence serialization;
+  - the anchor attests time and content, never legal validity.
+- **Tests:** `tests/test_stellar_anchoring.py`.
+
+## 16. Stage 10A-1 — real PDF ingestion and page-grounded evidence (2026-10-18)
+
+Details: [EVIDENCE_VERIFICATION.md](EVIDENCE_VERIFICATION.md) §4.4.
+
+- **Already in place (audited, unchanged):**
+  - pypdf text extraction per physical page;
+  - upload validation (signature, `%%EOF`, encryption, page, size, text and time limits) with nothing stored on rejection;
+  - the deterministic quote-to-page check and the evidence gate of approvals;
+  - tenant scope on every document route.
+- **Added:**
+  - the additive `text_layer` summary of every version (derived from the page records; no schema change);
+  - the refusal of a real AI call for a version without any text layer (422 `no_extractable_text`);
+  - an OCR notice in the document list;
+  - real-producer PDF fixtures (headless Chrome, synthetic) and their generator script.
+- **Unchanged on purpose:**
+  - the extraction mode and the stored page texts. Approvals bind their digests, and approval re-extracts with the upload method;
+  - the mock AI path.
+- **Real AI extraction:** `AnthropicAIService` exists and is the production dependency, but it has **never been run against a real model**. The quotation accuracy of a real model is unmeasured (limitation G).
+- **Tests:**
+  - `tests/test_real_pdf_ingestion.py` (backend);
+  - `frontend/src/test/TextLayer.test.tsx` (frontend).
+
+## 17. Stage 10A-2 — hardening of the real Anthropic extraction (2026-10-18)
+
+Details: [AI_EXTRACTION.md](AI_EXTRACTION.md).
+
+- **Found:**
+  - the production default was the real provider, with no consent mechanism;
+  - with no key the request failed with an unhandled `TypeError` (HTTP 500), and with any non-empty key, including the `.env.example` placeholder, the document text was sent to `api.anthropic.com`;
+  - the SDK resent requests twice on failure and had a 10-minute timeout;
+  - `max_tokens` was fixed at 4096, and a refusal was not recognized;
+  - error messages could echo model output;
+  - the SDK and the database driver log document text at DEBUG level.
+- **Implemented:**
+  - `AI_PROVIDER=disabled` by default; the key is a secret and its format is checked; the model must be on the supported list;
+  - bounded output tokens, input characters, pages and timeout, with one attempt per request;
+  - issuer opt-in (`external_ai_processing`) and a per-request confirmation bound to the version (428 / 409), with the rate limit counted only for requests that are sent;
+  - refusal and stop-reason handling, and rejection of ungrounded output;
+  - error messages without content; SDK and driver logs without document text; `hide_parameters`;
+  - an instruction that document text is untrusted data;
+  - a confirmation dialog in the interface;
+  - the real-PDF fixtures tracked with pinned SHA-256 values.
+- **Unchanged:**
+  - mock services, the evidence check and the approval gate;
+  - missing fields still become `unknown`;
+  - no schema change.
+- **Not done:**
+  - no live call has been made;
+  - consent is logged but not stored (that needs a migration).
+- **Tests:**
+  - `tests/test_ai_provider_hardening.py` (backend);
+  - `frontend/src/test/ExternalProcessing.test.tsx` (frontend);
+  - adapted inputs in `tests/conftest.py` (Meridian authorizes external AI), `tests/test_ai_output_integrity.py` and `tests/test_real_pdf_ingestion.py` (the trigger helpers send the confirmation).
+
+## 18. Stage 10A-3 — controlled live AI extraction harness (2026-10-18)
+
+Operator guide: [AI_LIVE_TEST.md](AI_LIVE_TEST.md).
+
+- **Added:** `scripts/ai_live_check.py`. It is disabled without a mode.
+  - It drives the real extraction route and its gates (issuer authorization, 428 confirmation bound to the version, evidence check) in a temporary environment. `.env` is not loaded, and the database is refused unless it is in the temporary directory.
+  - It accepts only the synthetic fixture with its pinned SHA-256.
+  - **`--dry-run`:** zero requests.
+  - **`--fake-provider`:** 14 offline scenarios, each with an expected outcome.
+  - **`--live`:** two authorization flags, an explicit budget and the key from the process environment. A guard transport allows one `POST /v1/messages` and nothing else, and SDK retries stay disabled.
+  - The worst-case cost is checked on the server's input size before confirming. Prices were verified on the pricing page (2026-10-18).
+  - The structured report covers model, tokens, cost, claim counts, grounding, validation errors, timing and human review. It contains no document text; claim values go to the report file only, on request.
+  - The harness never approves, and it checks that the development database is byte-identical afterwards.
+- **Application:** `build_ai_service` (the `get_ai_service` factory with an injectable transport) and content-free usage metadata on the service (`last_exchange`, `requests_attempted`). No route, gate or schema changed.
+- **Not done:** no live request has been made. Real AI extraction is not verified.
+- **Tests:** `tests/test_ai_live_check.py` (offline; the live path runs with a fake transport while the real transport is impossible to construct).
+
+## 19. Stage 10A-4 — preflight for the first live extraction (2026-10-18)
+
+- **Authorized by the owner:** one request with `claude-sonnet-4-6` and the synthetic fixture, estimated budget USD 0.25, executed manually (AI_LIVE_TEST.md §6).
+- **Model:** `claude-sonnet-4-6` is documented as active (legacy, retirement not sooner than 2027-02-17), at $3 / $15 per MTok (pricing page and model page, 2026-10-18). It is known to `anthropic` 1.14.0. It was missing from `SUPPORTED_AI_MODELS` and the harness price table, so the harness refused it; both now include it.
+- **Budget:** worst case $0.1336 (3,562 input characters, 8,192 output tokens), within $0.25. It is an estimate, not a provider billing guarantee.
+- **Added check:** the harness flags a response whose reported model differs from the requested one (`model_reported_differs_from_request`). No fallback is ever requested.
+- **Not done:** the live request itself (by the owner, outside Claude Code). Real AI extraction is not verified.
+
+## 20. Stage 10B-1 — real-browser end-to-end tests (2026-10-18)
+
+Details: [E2E_TESTING.md](E2E_TESTING.md).
+
+- **Added:**
+  - Playwright (`@playwright/test` 1.63.0, exact) with Playwright's Chromium;
+  - `scripts/e2e_run.py`: isolated servers on free ports, a temporary database, the real application, a production frontend build, offline network isolation, credential scan of the reports, and a byte check of the development database;
+  - `scripts/e2e_seed.py`: a synthetic dataset seeded through the real API;
+  - `frontend/e2e/`: journeys A–G and the negative journeys.
+- **Gaps found:** listed in E2E_TESTING.md (no not-found page, no PDF download link, and others). They are reported there, not fixed in this stage.
+- **Not covered:** visual design, accessibility audits, and browsers other than Chromium.
+
+## 21. Stage 10B-2 — institutional user journey (2026-10-18)
+
+Details: [E2E_TESTING.md](E2E_TESTING.md).
+
+- **Interface fixed:**
+  - a "Page not found" page;
+  - a verified PDF download: saved only if its bytes match the version's SHA-256, with file name, size and pages shown;
+  - the page reloads when credentials change, and the sidebar shows the server-confirmed identity, never the credential;
+  - the AI status is stated, and the extraction action is disabled when AI is disabled;
+  - each extraction is labelled AI or not AI;
+  - the second approval ("Add Your Approval");
+  - page titles, form labels and inline errors;
+  - unconfirmed Stellar records and invalid ones are no longer presented as proof.
+- **Backend:** one read-only route, `GET /ai/status` (`extraction:read`). It returns no secret and no key. No migration, and no change to access rules.
+- **Browser tests:**
+  - the serial Legal Passport journey: register, upload, download and hash, then claims, review, both approvals, passport and anchor;
+  - the anchor states pending, invalid and evidence changed;
+  - document integrity failures;
+  - recovery after an API failure;
+  - a report-hygiene self-test that fails on purpose.
+- **Credentials in reports:** prevented at the source. Failure messages are redacted and matcher page snapshots dropped before anything is written; the scan then verifies.
+- **Not complete:** with AI disabled and no manual claim entry, no claim can be created for a newly uploaded PDF. The browser journey reviews and approves seeded scripted claims of the same synthetic PDF. An upload-to-passport lifecycle on one new document has therefore not been exercised. Nothing here is a legal opinion or a claim of legal validity.
+
+## 22. Stage 10B-3 — manual legal claim workflow (2026-10-18)
+
+Details: [EVIDENCE_VERIFICATION.md](EVIDENCE_VERIFICATION.md) §13 and [E2E_TESTING.md](E2E_TESTING.md).
+
+- **Added:** `POST /documents/{document_id}/manual-extractions` (`extraction:run`, `app/manual_claims.py`).
+  - An authorized user of the issuer types legal claims from the current version of an uploaded PDF. No AI is involved.
+  - Every quotation must be verified on its cited page before anything is stored. The approval's source-integrity check of the stored PDF also runs first.
+  - The record is an ordinary draft labelled `source: manual`. Review, approval gates, separation of duties, passport and evidence manifest are reused unchanged.
+  - The passport reports `value_origin: manual_entry` and `extraction_source: manual`.
+  - No migration, and no change to the role permissions.
+- **Interface:**
+  - "Add Manual Claim" on each document, for roles with `extraction:run`. It shows the stored text of the selected page; pages without text cannot be chosen.
+  - Clear refusal messages, without internal detail on server errors.
+  - Manual records are labelled on the asset, review and passport pages. The passport says whether a value is attested by the issuer only or also by an independent legal reviewer.
+  - Anchor transaction actions are offered by role.
+- **Browser tests:**
+  - the complete lifecycle on a newly uploaded synthetic PDF: manual claim, refusal of fabricated and wrong-page quotations, two distinct reviewers, passport compared with the backend, not anchored;
+  - negative journeys for manual claims.
+- **Security finding:** the report-hygiene self-test found an intermittent credential leak. A matcher's diff colour codes could split a value past the redaction. It is fixed at the source (colour codes are removed before redaction), and the scan now also checks colour-stripped content. The one pre-fix report that held a run's synthetic credential was removed.
+- **Not done:** an author column for extraction records (needs a migration), and real AI extraction (still unverified). Nothing here is a legal opinion or establishes legal validity.
+
+## 23. Stage 10C-1 — grant demo readiness (2026-10-18)
+
+Details: [GRANT_DEMO.md](GRANT_DEMO.md). Nothing is deployed, and the application is not production-ready.
+
+- **Added (backward compatible; defaults unchanged):**
+  - `READ_ONLY_MODE`: every non-GET/HEAD/OPTIONS request is refused with 403 before authentication, for every credential;
+  - `API_DOCS_ENABLED`;
+  - `SYNTHETIC_DATA_NOTICE`;
+  - the three flags on `/health`;
+  - security headers on every API response (nosniff, DENY, no-referrer, no-store, a restrictive CSP and permissions policy).
+- **Interface:**
+  - a "How to read this application" explainer on the dashboard;
+  - a showcase banner;
+  - write actions hidden on a read-only server (the server enforces it);
+  - the API Reference uses the configured API URL and says when the docs are not published.
+- **Local demo:** `scripts/grant_demo.py`. It serves a read-only showcase or a writable sandbox of synthetic data on 127.0.0.1 only, and deletes it when stopped.
+- **Tests:** `tests/test_showcase_policies.py`, the `showcase` browser environment, and `ShowcaseMode.test.tsx`.
+- **Findings for deployment:**
+  - npm advisories: 2 moderate in production dependencies, high and critical ones in dev tooling, which includes `vite preview`;
+  - Python dependencies not audited (`pip-audit` needs installation approval);
+  - in-memory rate limits; no TLS or HSTS locally;
+  - SQLite and local storage;
+  - no author column on extraction records.
+
+## 24. Stage 10C-2 — deployment package and local rehearsal (2026-10-18)
+
+Details: [DEPLOYMENT.md](DEPLOYMENT.md). Nothing is deployed, and the application is not production-ready.
+
+- **Dependencies:**
+  - updated with tests passing: FastAPI 0.120.4, Starlette 0.49.3, python-multipart 0.0.32, python-dotenv 1.2.4;
+  - Python advisories (OSV): 71 → 61 distinct advisories (141 → 121 OSV records, which list most of them twice). The per-package table is in DEPLOYMENT.md §5. The remaining ones are in Starlette 1.x-only fixes, pypdf 6.x, pytest and pip;
+  - a test proves that a read-only server never parses a PDF;
+  - npm: no non-major fix exists; 2 moderate advisories in the production bundle (react-router, not reachable), the rest in dev tooling.
+- **Added:**
+  - `CLIENT_RATE_LIMIT_PER_MINUTE` and `AUTH_FAILURE_LIMIT_PER_MINUTE`, per address, with bounded memory and hashed addresses in logs;
+  - `scripts/build_showcase.py`, a deployable bundle with a showcase-only registry. It includes the genuine Testnet anchor when the demo dataset is present, and contains no synthetic anchor records;
+  - `deploy/rehearsal_proxy.py`, the `rehearsal` browser environment, and the proposed `deploy/Caddyfile` and `deploy/rwa-showcase-backend.service` (not tested: Caddy, systemd and Docker are not available);
+  - a frontend without the external font, with hashed files under `/static/`.
+- **Clean checkout:** the files a checkpoint commit would contain were copied alone. The backend, frontend, type checks, build and browser suites pass there.
 
 ---
 

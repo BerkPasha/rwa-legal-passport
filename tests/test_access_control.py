@@ -51,6 +51,7 @@ _ZERO_ID = "00000000-0000-0000-0000-000000000000"
 EXPECTED_ROUTE_GUARDS: dict[tuple[str, str], str | None] = {
     ("GET", "/health"): None,  # the only public route: liveness check
     ("GET", "/auth/me"): "get_current_principal",
+    ("GET", "/ai/status"): "require_extraction_read",
     ("POST", "/assets"): "require_asset_create",
     ("GET", "/assets"): "require_asset_read",
     ("GET", "/assets/{asset_id}"): "require_asset_read",
@@ -65,6 +66,7 @@ EXPECTED_ROUTE_GUARDS: dict[tuple[str, str], str | None] = {
     ("GET", "/documents/{document_id}/versions/{version_number}/text"): "require_document_read",
     ("GET", "/documents/{document_id}/download"): "require_document_read",
     ("POST", "/documents/{document_id}/extractions"): "require_extraction_run",
+    ("POST", "/documents/{document_id}/manual-extractions"): "require_extraction_run",
     ("GET", "/documents/{document_id}/extractions"): "require_extraction_read",
     ("GET", "/extractions/{extraction_id}"): "require_extraction_read",
     ("POST", "/extractions/{extraction_id}/review"): "require_review_start",
@@ -73,6 +75,12 @@ EXPECTED_ROUTE_GUARDS: dict[tuple[str, str], str | None] = {
     ("GET", "/extractions/{extraction_id}/corrections"): "require_audit_read",
     ("GET", "/extractions/{extraction_id}/approvals"): "require_audit_read",
     ("GET", "/passport/{network}/{asset_code}/{issuer_key}"): "require_passport_read",
+    # Stellar Testnet evidence anchoring (STELLAR_ANCHORING.md)
+    ("POST", "/assets/{asset_id}/stellar-anchors"): "require_anchor_create",
+    ("GET", "/assets/{asset_id}/stellar-anchors"): "require_asset_read",
+    ("POST", "/assets/{asset_id}/stellar-anchors/{anchor_id}/refresh"): "require_anchor_create",
+    ("GET", "/assets/{asset_id}/stellar-anchors/verification"): "require_asset_read",
+    ("GET", "/passport/{network}/{asset_code}/{issuer_key}/stellar-anchor"): "require_passport_read",
 }
 
 BEARER_ROUTES = [
@@ -108,6 +116,7 @@ def _concrete(path: str) -> str:
         .replace("{extraction_id}", _ZERO_ID)
         .replace("{claim_id}", _ZERO_ID)
         .replace("{version_number}", "1")
+        .replace("{anchor_id}", _ZERO_ID)
     )
 
 
@@ -588,13 +597,15 @@ async def test_full_authorized_workflow_across_roles(
     admin_headers: dict,
     issuer_headers: dict,
     legal_headers: dict,
+    second_legal_headers: dict,
     inst_headers: dict,
     inst_beta_headers: dict,
 ):
     """
     The operator registers the asset → the issuer uploads a document and runs the AI →
-    the issuer starts the review → the legal expert corrects and verifies →
-    the issuer gives the attestation → the in-scope institutional client reads the passport.
+    the issuer starts the review → a legal expert corrects → a second legal expert verifies
+    (no one approves their own correction, Stage 9B-5C) → the issuer gives the attestation →
+    the in-scope institutional client reads the passport.
     """
     asset = await client.post("/assets", headers=admin_headers, json=_MERIDIAN_ASSET)
     assert asset.status_code == 201
@@ -625,7 +636,10 @@ async def test_full_authorized_workflow_across_roles(
     assert r.status_code == 200 and r.json()["reviewer_id"] == "bob-martinez-01"
 
     r = await client.post(f"/extractions/{ext['id']}/approvals", headers=legal_headers, json={})
+    assert r.status_code == 409 and r.json()["approval_refusal"] == "self_review"
+    r = await client.post(f"/extractions/{ext['id']}/approvals", headers=second_legal_headers, json={})
     assert r.status_code == 201 and r.json()["approval_type"] == "legal_verification"
+    assert r.json()["reviewer_id"] == "grace-osei-01"
     r = await client.post(f"/extractions/{ext['id']}/approvals", headers=issuer_headers, json={})
     assert r.status_code == 201 and r.json()["approval_type"] == "issuer_attestation"
 

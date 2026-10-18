@@ -26,6 +26,7 @@ class Permission(str, enum.Enum):
     claim_correct = "claim:correct"
     approval_create = "approval:create"
     audit_read = "audit:read"
+    anchor_create = "anchor:create"  # Stellar Testnet evidence anchoring (STELLAR_ANCHORING.md)
 
 
 class InstitutionalOperation(str, enum.Enum):
@@ -45,6 +46,7 @@ ROLE_PERMISSIONS: dict[UserRole, frozenset[Permission]] = {
         Permission.extraction_run,
         Permission.extraction_read,
         Permission.audit_read,
+        Permission.anchor_create,
     }),
     # Issuer reviewer: uploads its own documents, starts AI extraction,
     # reviews and gives the issuer attestation (issuer_attestation).
@@ -58,6 +60,7 @@ ROLE_PERMISSIONS: dict[UserRole, frozenset[Permission]] = {
         Permission.claim_correct,
         Permission.approval_create,
         Permission.audit_read,
+        Permission.anchor_create,
     }),
     # Independent legal expert: reads, reviews and corrects the documents of the
     # assigned issuers and gives the legal verification (legal_verification). Cannot

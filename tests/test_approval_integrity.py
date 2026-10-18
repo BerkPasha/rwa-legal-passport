@@ -373,6 +373,7 @@ async def test_historical_approval_snapshots_are_preserved(
     created_extraction: dict,
     issuer_headers: dict,
     legal_headers: dict,
+    second_legal_headers: dict,
     admin_headers: dict,
 ):
     eid = created_extraction["id"]
@@ -392,7 +393,8 @@ async def test_historical_approval_snapshots_are_preserved(
               "expected_claim": _as_read(created_extraction, "ownership_nature")},
     )
     assert r.status_code == 200
-    r = await _approve(client, eid, legal_headers)
+    # Another legal reviewer approves the correction (no one approves their own, Stage 9B-5C)
+    r = await _approve(client, eid, second_legal_headers)
     assert r.status_code == 201, r.text
     second = r.json()
 
@@ -768,6 +770,9 @@ async def test_concurrent_uploads_approvals_and_asset_changes_stay_consistent(
         assert await check_passport_matches_database() == 200
 
         # ── (4) Random races: every status code must match the resulting database state ──
+        # A new version first: (3)'s approval of the current version would otherwise make the
+        # first round's approval a competing extraction (Stage 9B-5C), which is not this race
+        assert (await _new_version(issuer_client, document["id"], "before-races")).status_code == 201
         outcomes = []
         for round_number in range(4):
             extraction = await _extract(issuer_client, document["id"])
@@ -797,6 +802,7 @@ async def test_concurrent_uploads_approvals_and_asset_changes_stay_consistent(
             outcomes.append((upload.status_code, approval.status_code, await check_passport_matches_database()))
 
         # ── (5) Material asset change racing with two reviewers approving at once ──
+        earlier_rounds: list[str] = []
         for round_number in range(3):
             extraction = await _extract(issuer_client, document["id"])
             revision_before = (await admin_client.get(f"/assets/{asset['id']}")).json()["material_revision"]
@@ -816,11 +822,18 @@ async def test_concurrent_uploads_approvals_and_asset_changes_stay_consistent(
             for r in created:
                 assert r.json()["asset_material_revision"] in (revision_before, revision_after)
             for r in (issuer_approval, legal_approval):
-                if r.status_code == 409:
+                if r.status_code == 409 and r.json().get("approval_refusal") == "competing_extraction":
+                    # Rule B5 (Stage 9B-5C): an earlier round's extraction of this same version still
+                    # holds a current approval (given after that round's asset change) and this round's
+                    # approval reached the lock before this round's asset change made it stale
+                    competing = r.json()["competing_extraction_ids"]
+                    assert competing and set(competing) <= set(earlier_rounds), r.text
+                elif r.status_code == 409:
                     # The other approval came first and a committed asset change made it stale
                     assert "start a re-review" in r.json()["detail"] and revision_after > revision_before
                 else:
                     assert r.status_code in (201, 503), r.text
+            earlier_rounds.append(extraction["id"])
             outcomes.append((patch.status_code, issuer_approval.status_code, legal_approval.status_code,
                              await check_passport_matches_database()))
         print(f"concurrency outcomes: {outcomes}")
@@ -1013,7 +1026,10 @@ async def test_forced_interleavings_of_approval_with_upload_and_asset_change(
         assert r.json()["asset_snapshot"]["jurisdiction"] == "KY-CAYMAN"
         assert (await client.get(url, headers=inst_headers)).status_code == 200
 
-        # (b') approval holds the lock; the asset change waits and makes it stale afterwards
+        # (b') approval holds the lock; the asset change waits and makes it stale afterwards. A new
+        #      version first: (a')'s approval of this version is still current, and a second
+        #      approved extraction of one version is refused (Stage 9B-5C, competing_extraction)
+        assert (await _new_version(issuer_client, document["id"], "b'-version")).status_code == 201
         extraction = await _extract(issuer_client, document["id"])
         lock_held = asyncio.Event()
         await while_locked(lock_held)

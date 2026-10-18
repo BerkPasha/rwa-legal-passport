@@ -1,16 +1,18 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import {
   ApiError,
   approveExtraction,
   correctClaim,
   getApprovals,
   getCorrections,
+  getAiStatus,
   getExtraction,
   startReview,
 } from '../api'
 import type {
   ApprovalPayload,
+  ApprovalType,
   LegalClaim,
   LegalExtraction,
   ReviewApproval,
@@ -42,6 +44,8 @@ import {
   valueChanged,
 } from '../evidence'
 import { useAuth } from '../AuthContext'
+import { useReadOnly } from '../serverInfo'
+import { extractionOrigin } from '../aiProcessing'
 
 function fmt(iso: string) {
   return new Date(iso).toLocaleString('en-GB', {
@@ -308,13 +312,18 @@ function EvidenceChange({ page, passage, recorded }: { page: number | null; pass
 }
 
 export function ExtractionDetail() {
+  // Set by the manual claim form after the server created this draft (Stage 10B-3)
+  const manualClaimCreated = (useLocation().state as { manualClaimCreated?: boolean } | null)?.manualClaimCreated === true
   const { id: assetId, extractionId } = useParams<{
     id: string
     docId: string
     extractionId: string
   }>()
-  const { userToken } = useAuth()
+  const { userToken, identity } = useAuth()
+  // A read-only showcase refuses every write (Stage 10C-1); its actions are not offered
+  const readOnly = useReadOnly()
   const [token, setToken] = useState(userToken)
+  const [supportedModels, setSupportedModels] = useState<string[] | null>(null)
   const [extraction, setExtraction] = useState<LegalExtraction | null>(null)
   const [corrections, setCorrections] = useState<ReviewCorrection[]>([])
   const [approvals, setApprovals] = useState<ReviewApproval[]>([])
@@ -372,6 +381,9 @@ export function ExtractionDetail() {
     loadAll()
   }, [extractionId])
   useEffect(() => { setToken(userToken) }, [userToken])
+  useEffect(() => {
+    getAiStatus().then(status => setSupportedModels(status.supported_models)).catch(() => setSupportedModels(null))
+  }, [])
 
   const handleStartReview = async () => {
     if (!extractionId || !token) return
@@ -426,7 +438,18 @@ export function ExtractionDetail() {
   const foundCount = extraction.claims.filter(c => !c.is_unknown && c.evidence?.status === 'verified').length
   const reviewedVersionNumber = extraction.claims.find(c => c.evidence?.version_number != null)?.evidence.version_number ?? null
   const versionLabel = reviewedVersionNumber != null ? `version ${reviewedVersionNumber}` : 'this document version'
-  const canCorrect = !!token && extraction.status !== 'approved'
+  const canCorrect = !readOnly && !!token && extraction.status !== 'approved'
+  // The approval type the signed-in reviewer would add (derived by the server from the role)
+  const myApprovalType: ApprovalType | null = identity.state === 'signed_in'
+    ? (identity.user.role === 'issuer_reviewer' ? 'issuer_attestation'
+      : identity.user.role === 'independent_legal_reviewer' ? 'legal_verification' : null)
+    : null
+  const currentTypes = approvalState?.current_approval_types ?? []
+  // A second reviewer of the other type can add an approval to a current one (the server decides)
+  const canAddApproval = approvalIsCurrent && versionIsCurrent && myApprovalType !== null && !currentTypes.includes(myApprovalType)
+  const showApproveForm = versionIsCurrent && (extraction.status === 'draft' || extraction.status === 'under_review' || canAddApproval)
+  const origin = extractionOrigin(extraction.ai_model, supportedModels, extraction.source)
+  const manual = extraction.source === 'manual'
 
   return (
     <div className="space-y-6">
@@ -444,13 +467,18 @@ export function ExtractionDetail() {
         <div className="flex flex-wrap items-start gap-4">
           <div className="flex-1">
             <div className="flex flex-wrap items-center gap-3">
-              <h2 className="text-xl font-bold text-slate-900">AI Extraction Result</h2>
+              <h2 className="text-xl font-bold text-slate-900">{manual ? 'Manually Entered Legal Claims' : 'AI Extraction Result'}</h2>
               <ExtractionStatusBadge status={extraction.status} />
               <ApprovalStateBadge state={approvalState?.state} />
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-4 text-sm text-slate-500">
-              <span>Model: <span className="font-mono font-medium text-slate-700">{extraction.ai_model}</span></span>
-              <span>Extracted: {fmt(extraction.extraction_timestamp)}</span>
+              {!manual && <span>Model: <span className="font-mono font-medium text-slate-700">{extraction.ai_model}</span></span>}
+              <span data-testid="extraction-origin" data-origin={origin.kind}
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${origin.kind === 'ai' ? 'bg-violet-50 text-violet-700 ring-violet-200' : origin.kind === 'manual' ? 'bg-indigo-50 text-indigo-700 ring-indigo-200' : 'bg-slate-100 text-slate-700 ring-slate-300'}`}>
+                {origin.kind === 'ai' ? 'AI extraction' : origin.kind === 'manual' ? 'Manual entry · no AI'
+                  : origin.kind === 'not_ai' ? 'Not produced by a supported AI model (test or imported data)' : 'Origin not confirmed'}
+              </span>
+              <span>{manual ? 'Entered' : 'Extracted'}: {fmt(extraction.extraction_timestamp)}</span>
               {reviewedVersionNumber != null && (
                 <span data-testid="extraction-version">Document version {reviewedVersionNumber}</span>
               )}
@@ -478,6 +506,13 @@ export function ExtractionDetail() {
       </div>
 
       {/* Disclaimer */}
+      {manualClaimCreated && (
+        <p role="status" data-testid="manual-claim-created"
+           className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900 ring-1 ring-emerald-200">
+          Draft created. Each entered quotation was found on its cited page of this document version (source-text
+          presence only). Nothing is approved: the review and approvals below are still required.
+        </p>
+      )}
       <DisclaimerBanner text={extraction.disclaimer} />
 
       {correctionNotice && (
@@ -586,12 +621,18 @@ export function ExtractionDetail() {
       <div className="rounded-xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
         <h3 className="font-semibold text-slate-900">Review Workflow</h3>
 
-        {!token ? (
+        {readOnly ? (
+          <p data-testid="review-read-only-note" className="mt-4 text-sm text-slate-500">
+            Read-only showcase: reviews, corrections and approvals cannot be given on this server. The status,
+            evidence and approval history below are shown as recorded.
+          </p>
+        ) : !token ? (
           <div className="mt-4 space-y-3">
             <p className="text-sm text-slate-500">Enter your reviewer token to access review controls.</p>
             <div className="flex gap-3">
               <input
                 type="password"
+                aria-label="Reviewer token (Bearer)"
                 value={token}
                 onChange={e => setToken(e.target.value)}
                 placeholder="Bearer token…"
@@ -663,15 +704,23 @@ export function ExtractionDetail() {
               </button>
             )}
 
-            {(extraction.status === 'draft' || extraction.status === 'under_review') && versionIsCurrent && (
+            {showApproveForm && (
               <form onSubmit={handleApprove} className="rounded-xl bg-green-50 p-4 ring-1 ring-green-200">
-                <p className="mb-3 font-medium text-green-900">Approve This Extraction</p>
+                <p className="mb-3 font-medium text-green-900">{canAddApproval ? 'Add Your Approval' : 'Approve This Extraction'}</p>
+                {canAddApproval && (
+                  <p data-testid="add-approval-note" className="mb-3 text-xs text-green-800">
+                    This extraction already has a current approval. As {identity.state === 'signed_in' ? identity.user.display_name : 'a reviewer'} you
+                    can add the {myApprovalType === 'legal_verification' ? 'independent legal review' : 'issuer attestation'}; each
+                    reviewer approves once, and the server applies every evidence and independence rule.
+                  </p>
+                )}
                 <p className="mb-3 text-xs text-green-700">
                   Approval requires every known field to have a quotation that the server finds on its
                   cited page of this document version. A found quote proves source-text presence only.
                   This approval is an internal attestation — it does not constitute a legally binding opinion.
                 </p>
                 <input
+                  aria-label="Approval notes (optional)"
                   value={approvalNotes}
                   onChange={e => setApprovalNotes(e.target.value)}
                   placeholder="Optional notes…"

@@ -148,6 +148,8 @@ export const STALE_REASON_LABELS: Record<ApprovalStaleReason, string> = {
   source_text_changed: 'The stored page text differs from the approved text',
   evidence_not_verified: 'A quotation is no longer found on its cited page',
   source_file_integrity_failed: 'The stored source file does not match the approved file',
+  competing_current_extractions: 'Several extractions of this document version are approved; none is used',
+  self_reviewed_approval: 'Only a self-reviewed legal approval exists; it is not counted',
 }
 
 const approvalStateStyles: Record<Exclude<ExtractionApprovalStateValue, 'not_approved'>, string> = {

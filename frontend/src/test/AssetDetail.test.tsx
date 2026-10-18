@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw'
 import { server } from './mocks/server'
 import { MOCK_ASSET, MOCK_DOCUMENT, MOCK_EXTRACTION, MOCK_VERSION } from './mocks/handlers'
 import { AssetDetail } from '../pages/AssetDetail'
+import { AuthProvider } from '../AuthContext'
 import { Dashboard } from '../pages/Dashboard'
 
 const BASE = 'http://localhost:8000'
@@ -12,9 +13,11 @@ const BASE = 'http://localhost:8000'
 function renderAsset() {
   return render(
     <MemoryRouter initialEntries={['/assets/asset-001']}>
-      <Routes>
-        <Route path="assets/:id" element={<AssetDetail />} />
-      </Routes>
+      <AuthProvider>
+        <Routes>
+          <Route path="assets/:id" element={<AssetDetail />} />
+        </Routes>
+      </AuthProvider>
     </MemoryRouter>,
   )
 }
@@ -35,7 +38,7 @@ describe('AssetDetail with the backend document schema (Stage 9B-4, step 9)', ()
         HttpResponse.json([{ ...MOCK_DOCUMENT, current_version: MOCK_VERSION }])),
     )
     renderAsset()
-    expect(await screen.findByText(`${MOCK_VERSION.sha256_hash.slice(0, 16)}…`)).toBeInTheDocument()
+    expect(await screen.findByText(`SHA-256 ${MOCK_VERSION.sha256_hash.slice(0, 16)}…`)).toBeInTheDocument()
   })
 
   it('shows an inaccessible asset as not found', async () => {
@@ -54,7 +57,7 @@ describe('Dashboard asset status (Stage 9B-4, step 9)', () => {
         { ...MOCK_ASSET, id: 'asset-002', stellar_asset_code: 'HBRBND', status: 'suspended' },
       ])),
     )
-    render(<MemoryRouter><Dashboard /></MemoryRouter>)
+    render(<MemoryRouter><AuthProvider><Dashboard /></AuthProvider></MemoryRouter>)
     const badges = await screen.findAllByTestId('asset-status-badge')
     expect(badges.map(b => b.textContent)).toEqual(['active', 'suspended'])
     expect(screen.queryByText('Approved')).not.toBeInTheDocument()

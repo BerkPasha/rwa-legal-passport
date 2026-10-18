@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { getLegalPassport, ApiError } from '../api'
-import type { ApprovalType, LegalPassport, BlockchainNetwork, ReviewerRole } from '../types'
+import { useSearchParams } from 'react-router-dom'
+import { getLegalPassport, getPassportAnchorVerification, ApiError } from '../api'
+import type { AnchorVerification, ApprovalType, LegalPassport, BlockchainNetwork, ReviewerRole } from '../types'
 import { EVIDENCE_SCOPE_NOTE, evidenceStatusLabel } from '../evidence'
 import {
   ApprovalTypeBadge,
@@ -9,6 +10,7 @@ import {
   VerificationLevelBadge,
 } from '../components/StatusBadge'
 import { DisclaimerBanner } from '../components/DisclaimerBanner'
+import { EvidenceAnchorCard } from '../components/EvidenceAnchorCard'
 import { Spinner } from '../components/Spinner'
 import { useAuth } from '../AuthContext'
 
@@ -165,6 +167,19 @@ function PassportCard({ passport }: { passport: LegalPassport }) {
                     {!right.conflict && right.value_origin === 'reviewer_correction' && (
                       <p data-testid="value-origin" className="mt-1 text-xs text-slate-500">Value corrected by a reviewer before approval</p>
                     )}
+                    {!right.conflict && right.value_origin === 'manual_entry' && (
+                      <p data-testid="value-origin" className="mt-1 text-xs text-slate-500">
+                        Entered manually by a user of the issuer from the cited page (no AI)
+                      </p>
+                    )}
+                    {/* Who stands behind the value: the issuer's own statement, or also an independent legal reviewer (Stage 10B-3) */}
+                    {!right.is_unknown && !right.conflict && right.reviewer_attestation_status !== 'not_applicable' && (
+                      <p data-testid="passport-attestation" className="mt-1 text-xs text-slate-500">
+                        {right.reviewer_attestation_status === 'independent_reviewer_attested'
+                          ? 'Approved by the issuer and attested by an independent legal reviewer (internal attestations, not a legal opinion)'
+                          : 'Issuer attestation only — not reviewed by an independent legal reviewer'}
+                      </p>
+                    )}
                     {!right.is_unknown && !right.conflict && !right.verified && right.evidence_status && (
                       <p data-testid="passport-evidence-status" className="mt-1 text-xs text-amber-700">
                         Quotation not verified: {evidenceStatusLabel(right.evidence_status)}
@@ -239,11 +254,19 @@ function PassportCard({ passport }: { passport: LegalPassport }) {
               <dd className="mt-1 font-mono text-xs text-slate-800">{meta.extraction_id}</dd>
             </div>
             <div>
-              <dt className="text-xs text-slate-400">Model Used</dt>
-              <dd className="mt-1 font-mono text-xs text-slate-800">{meta.ai_model || '—'}</dd>
+              <dt className="text-xs text-slate-400">Claim Source</dt>
+              <dd data-testid="passport-extraction-source" className="mt-1 text-xs text-slate-800">
+                {meta.extraction_source === 'manual' ? 'Manual entry (no AI model)' : 'Extraction service'}
+              </dd>
             </div>
+            {meta.extraction_source !== 'manual' && (
+              <div>
+                <dt className="text-xs text-slate-400">Model Used</dt>
+                <dd className="mt-1 font-mono text-xs text-slate-800">{meta.ai_model || '—'}</dd>
+              </div>
+            )}
             <div>
-              <dt className="text-xs text-slate-400">Extracted At</dt>
+              <dt className="text-xs text-slate-400">{meta.extraction_source === 'manual' ? 'Entered At' : 'Extracted At'}</dt>
               <dd className="mt-1 text-xs text-slate-800">
                 {new Date(meta.extraction_timestamp).toLocaleString('en-US')}
               </dd>
@@ -282,11 +305,16 @@ function PassportCard({ passport }: { passport: LegalPassport }) {
 
 export function PassportPreview() {
   const { apiKey } = useAuth()
-  const [network, setNetwork] = useState<BlockchainNetwork>('stellar-testnet')
-  const [assetCode, setAssetCode] = useState('')
-  const [issuerKey, setIssuerKey] = useState('')
+  // Prefilled from a link such as /passport?network=…&asset_code=…&issuer_key=… (asset page)
+  const [params] = useSearchParams()
+  const [network, setNetwork] = useState<BlockchainNetwork>(
+    params.get('network') === 'stellar-mainnet' ? 'stellar-mainnet' : 'stellar-testnet')
+  const [assetCode, setAssetCode] = useState((params.get('asset_code') ?? '').toUpperCase())
+  const [issuerKey, setIssuerKey] = useState(params.get('issuer_key') ?? '')
   const [keyOverride, setKeyOverride] = useState('')
   const [passport, setPassport] = useState<LegalPassport | null>(null)
+  const [anchor, setAnchor] = useState<AnchorVerification | null>(null)
+  const [anchorError, setAnchorError] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -301,18 +329,31 @@ export function PassportPreview() {
     setLoading(true)
     setError('')
     setPassport(null)
-    try {
-      const result = await getLegalPassport(network, assetCode.trim().toUpperCase(), issuerKey.trim(), effectiveKey)
-      setPassport(result)
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(`${err.status}: ${err.message}`)
-      } else {
-        setError('Lookup failed — check network and credentials.')
-      }
-    } finally {
-      setLoading(false)
+    setAnchor(null)
+    setAnchorError('')
+    const code = assetCode.trim().toUpperCase()
+    const issuer = issuerKey.trim()
+    // The passport and its Stellar evidence commitment are read independently: the commitment is
+    // shown even when no approved passport is current (e.g. after the evidence changed)
+    const [passportResult, anchorResult] = await Promise.allSettled([
+      getLegalPassport(network, code, issuer, effectiveKey),
+      getPassportAnchorVerification(network, code, issuer, effectiveKey),
+    ])
+    if (passportResult.status === 'fulfilled') {
+      setPassport(passportResult.value)
+    } else if (passportResult.reason instanceof ApiError) {
+      setError(`${passportResult.reason.status}: ${passportResult.reason.message}`)
+    } else {
+      setError('Lookup failed — check network and credentials.')
     }
+    if (anchorResult.status === 'fulfilled') {
+      setAnchor(anchorResult.value)
+    } else if (!(anchorResult.reason instanceof ApiError && anchorResult.reason.status === 404)) {
+      setAnchorError(anchorResult.reason instanceof ApiError
+        ? `Stellar commitment unavailable — ${anchorResult.reason.status}: ${anchorResult.reason.message}`
+        : 'Stellar commitment unavailable — the server could not be reached.')
+    }
+    setLoading(false)
   }
 
   return (
@@ -329,8 +370,9 @@ export function PassportPreview() {
         <form onSubmit={handleLookup} className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Network</label>
+              <label htmlFor="passport-network" className="mb-1 block text-sm font-medium text-slate-700">Network</label>
               <select
+                id="passport-network"
                 value={network}
                 onChange={e => setNetwork(e.target.value as BlockchainNetwork)}
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
@@ -340,8 +382,9 @@ export function PassportPreview() {
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Asset Code</label>
+              <label htmlFor="passport-asset-code" className="mb-1 block text-sm font-medium text-slate-700">Asset Code</label>
               <input
+                id="passport-asset-code"
                 required
                 value={assetCode}
                 onChange={e => setAssetCode(e.target.value.toUpperCase())}
@@ -351,8 +394,9 @@ export function PassportPreview() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">Issuer Public Key</label>
+              <label htmlFor="passport-issuer-key" className="mb-1 block text-sm font-medium text-slate-700">Issuer Public Key</label>
               <input
+                id="passport-issuer-key"
                 required
                 value={issuerKey}
                 onChange={e => setIssuerKey(e.target.value)}
@@ -364,18 +408,20 @@ export function PassportPreview() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              Institutional API Key
+            <label htmlFor="passport-api-key" className="mb-1 block text-sm font-medium text-slate-700">
+              Institutional API Key for this lookup
               {apiKey && <span className="ml-2 text-xs font-normal text-green-600">(set via Credentials)</span>}
             </label>
             <input
+              id="passport-api-key"
               type="password"
+              aria-describedby="passport-api-key-note"
               value={keyOverride}
               onChange={e => setKeyOverride(e.target.value)}
               placeholder={apiKey ? '(using key from Credentials panel)' : 'X-API-Key…'}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
-            <p className="mt-1 text-xs text-slate-400">
+            <p id="passport-api-key-note" className="mt-1 text-xs text-slate-400">
               Leave blank to use the key set in the sidebar Credentials panel.
             </p>
           </div>
@@ -401,6 +447,12 @@ export function PassportPreview() {
 
       {/* Result */}
       {passport && <PassportCard passport={passport} />}
+      {anchor && <EvidenceAnchorCard verification={anchor} />}
+      {anchorError && (
+        <div data-testid="anchor-lookup-error" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-amber-200">
+          {anchorError}
+        </div>
+      )}
     </div>
   )
 }

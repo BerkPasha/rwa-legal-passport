@@ -47,6 +47,13 @@ import app.models.extraction  # noqa: E402,F401
 import app.models.review  # noqa: E402,F401
 from app.db.base import Base  # noqa: E402
 
+# The tables this migration governs (the models imported above). Tables added by later stages,
+# such as stellar_anchors, are additive: the application creates them, empty, at startup.
+GOVERNED_TABLES = (
+    "assets", "document_pages", "document_versions", "documents",
+    "legal_claims", "legal_extractions", "review_approvals", "review_corrections",
+)
+
 TABLE = "review_corrections"
 NEW_COLUMNS = ("original_source_page", "corrected_source_page", "evidence_audit_version")
 # Columns that must exist before this migration (Stage 9B-3)
@@ -83,7 +90,7 @@ def rollback_statements(con: sqlite3.Connection) -> list[str]:
 def schema_signature(con: sqlite3.Connection) -> dict:
     """Structure of every model table, independent of how the DDL text was written."""
     signature = {}
-    for table in sorted(Base.metadata.tables):
+    for table in GOVERNED_TABLES:
         columns = [row[1:6] for row in con.execute(f"PRAGMA table_xinfo({table})")]
         fks = sorted(row[2:5] for row in con.execute(f"PRAGMA foreign_key_list({table})"))
         indexes = []
@@ -115,7 +122,7 @@ def pre_migration_signature() -> dict:
 
 
 def row_counts(con: sqlite3.Connection) -> dict:
-    return {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in sorted(Base.metadata.tables)}
+    return {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in GOVERNED_TABLES}
 
 
 def _existing_rows(con: sqlite3.Connection, columns: list[str]) -> list[tuple]:

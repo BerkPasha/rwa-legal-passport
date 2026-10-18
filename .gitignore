@@ -20,6 +20,13 @@ secrets/
 service-account*.json
 # Access-control policy with credential hashes (template: access_control.example.json)
 access_control.json
+# Showcase bundles and the fictional credentials of local demos (scripts/build_showcase.py,
+# scripts/grant_demo.py). Written to scratch/ or a temporary directory by default; ignored
+# anywhere, in case --out points into the repository
+showcase-bundle/
+evaluator-credentials.txt
+demo-credentials.txt
+rehearsal-context.json
 
 # ---- Local databases ---------------------------------------------------------
 *.db
@@ -33,6 +40,9 @@ access_control.json
 
 # ---- Local scratch work --------------------------------------------------------
 /scratch/
+# Playwright output when run without scripts/e2e_run.py (which writes to scratch/e2e/)
+frontend/test-results/
+frontend/playwright-report/
 
 # ---- Uploaded legal documents (STORAGE_PATH) ---------------------------------
 storage/
@@ -42,6 +52,12 @@ uploads/
 *.pdf
 *.doc
 *.docx
+# Exception: the three synthetic, non-confidential real-producer test fixtures. Their SHA-256 values
+# are pinned in tests/fixtures/real_pdfs/SHA256SUMS and checked by the tests, so no other PDF can
+# take their place unnoticed (tests/fixtures/real_pdfs/README.md)
+!tests/fixtures/real_pdfs/trust_prospectus.pdf
+!tests/fixtures/real_pdfs/mixed_scanned.pdf
+!tests/fixtures/real_pdfs/scanned_only.pdf
 
 # ---- Python ------------------------------------------------------------------
 .venv/

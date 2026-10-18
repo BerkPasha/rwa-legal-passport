@@ -74,7 +74,8 @@ SYSTEM_DISCLAIMERS = {
 }
 SYSTEM_NOTICES = {"source_text": SOURCE_TEXT_NOTICE, "verification_meaning": SOURCE_VERIFICATION_MEANING}
 EXTRACTION_KEYS = {"id", "document_id", "version_id", "status", "ai_model", "disclaimer", "extraction_timestamp",
-                   "created_at", "claims", "approval_state"}
+                   "created_at", "claims", "approval_state",
+                   "source"}  # Stage 10B-3: one additive field (ai_service / manual)
 
 
 def _is_english_text(value: str) -> bool:

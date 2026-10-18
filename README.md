@@ -99,9 +99,47 @@ The interface is English-only. `npm run build` writes the production build to `f
 pytest -v                      # backend: uses in-memory or scratch databases, never rwa_legal_passport.db
 cd frontend; npm test          # frontend (Vitest)
 cd frontend; npx tsc --noEmit  # type check
+python scripts/e2e_run.py      # real-browser end-to-end tests (Playwright + Chromium, isolated servers)
 ```
 
-No test makes a paid AI call or contacts the Stellar network: both are replaced by mocks.
+The end-to-end tests start their own backend and frontend on free ports, with a temporary database and fictional credentials. See **[E2E_TESTING.md](E2E_TESTING.md)**.
+
+For a local grant demo, `python scripts/grant_demo.py` serves a read-only showcase of the synthetic dataset on this computer only, and deletes it when stopped. The procedure, the read-only showcase and evaluator sandbox designs, and the deployment security audit are in **[GRANT_DEMO.md](GRANT_DEMO.md)**. The deployable showcase bundle (`scripts/build_showcase.py`), the proposed reverse proxy and service configuration (`deploy/`), the local deployment rehearsal and the dependency audit are in **[DEPLOYMENT.md](DEPLOYMENT.md)**. Nothing is deployed.
+
+No test makes a paid AI call or contacts the Stellar network: both are replaced by mocks or blocked. The only exception is the opt-in `scripts/e2e_run.py --testnet-readonly`, which reads Stellar Testnet without submitting anything.
+
+---
+
+## AI extraction
+
+AI extraction is **disabled by default** (`AI_PROVIDER=disabled`): no document text is sent to any AI service. With `AI_PROVIDER=anthropic`, the text of a document version is sent to Anthropic only under three conditions:
+- a valid `ANTHROPIC_API_KEY` is set on the server;
+- the document's issuer has `"external_ai_processing": true` in `access_control.json`;
+- the user confirms that exact request.
+
+Inputs and outputs are bounded, and the result is always an unverified draft. See **[AI_EXTRACTION.md](AI_EXTRACTION.md)**. The real model has not yet been tested live.
+
+The first live test is prepared as a harness that does nothing without explicit flags. Rehearse it offline:
+
+```powershell
+python scripts/ai_live_check.py --dry-run                # every gate up to the confirmation; no AI request
+python scripts/ai_live_check.py --fake-provider all      # offline fake provider, all scenarios
+```
+
+The one authorized live run and its evaluation: **[AI_LIVE_TEST.md](AI_LIVE_TEST.md)**.
+
+---
+
+## Stellar Testnet evidence anchoring
+
+A passport's evidence manifest can be committed to Stellar Testnet (memo hash + `manage_data`) and verified against live network data. See **[STELLAR_ANCHORING.md](STELLAR_ANCHORING.md)**.
+
+```powershell
+python scripts/stellar_testnet_setup.py   # once: creates and funds the Testnet anchoring account (secrets/, gitignored)
+python scripts/stellar_testnet_e2e.py     # end-to-end demo on a disposable database, real Testnet transaction
+```
+
+An anchor is not a legal approval; Testnet is reset periodically, and Mainnet anchoring is not supported. The browser demo on synthetic data (verification-only, no transaction, no paid AI) is described in **[DEMO.md](DEMO.md)**.
 
 ---
 

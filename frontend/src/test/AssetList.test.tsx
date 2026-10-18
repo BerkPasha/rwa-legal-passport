@@ -7,13 +7,19 @@ import { server } from './mocks/server'
 import { MOCK_ASSET } from './mocks/handlers'
 import { setUserToken } from '../api'
 import { AssetList } from '../pages/AssetList'
+import { AuthProvider } from '../AuthContext'
 
-afterEach(() => setUserToken(''))
+afterEach(() => {
+  setUserToken('')
+  sessionStorage.clear()
+})
 
 function renderWithRouter() {
   return render(
     <MemoryRouter>
-      <AssetList />
+      <AuthProvider>
+        <AssetList />
+      </AuthProvider>
     </MemoryRouter>,
   )
 }
@@ -94,7 +100,8 @@ describe('AssetList', () => {
         return HttpResponse.json({ ...MOCK_ASSET, ...captured.body, id: 'asset-new' }, { status: 201 })
       }),
     )
-    setUserToken('fictional-admin-token')
+    // The token is entered the way the app keeps it: the AuthProvider loads it for this tab
+    sessionStorage.setItem('rwa_passport_session_auth', JSON.stringify({ userToken: 'fictional-admin-token', apiKey: '' }))
     renderWithRouter()
     await screen.findByText('MRPROP')
     await userEvent.click(screen.getByRole('button', { name: /register asset/i }))

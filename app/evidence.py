@@ -203,6 +203,11 @@ class SourceDocumentText:
         return {number: normalize_text(text) for number, text in self._texts.items()}
 
     @cached_property
+    def pages_without_text(self) -> tuple[int, ...]:
+        """Pages with no text after normalization: the no_text_layer rule (valid sources only)."""
+        return tuple(number for number, text in self.normalized_pages.items() if not text)
+
+    @cached_property
     def text_sha256(self) -> str:
         """SHA-256 over all page numbers and raw texts in page order (valid sources only)."""
         canonical = json.dumps(

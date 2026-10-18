@@ -17,6 +17,7 @@ minimal_pdf stays a blank, scanned-like PDF on which no quotation can ever be ve
 
 import io
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -28,6 +29,7 @@ from app.main import app
 from app.rate_limit import InMemoryRateLimiter, get_extraction_rate_limiter, get_rate_limiter
 from app.services.ai import get_ai_service
 from app.services.stellar import get_stellar_service
+from app.services.stellar_anchor import StellarAnchorService, get_anchor_service
 from app.services.storage import StorageService, get_storage
 from tests.mock_ai import MockAIService
 from tests.mock_stellar import MockStellarService
@@ -46,7 +48,7 @@ _MERIDIAN_ASSET = {
     "issuer_id": MERIDIAN_ISSUER,
     "blockchain_network": "stellar-mainnet",
     "stellar_asset_code": "MRPROP",
-    "stellar_issuer_public_key": "GCEZFBCKNOXYELQZFQ7JKPWQABYOPZKVIPQLNOILMWMEXGWAF7RQJCUQ",
+    "stellar_issuer_public_key": "GCEXZSDIMN7TYVO5FITNJNNEJTRLWV4YRXMVOLF6Q2CAZBMBDZUJY2YV",
     "issuer_organization_name": "Meridian Property Holdings LLC",
     "asset_type": "real_estate",
     "jurisdiction": "US-NY",
@@ -57,7 +59,7 @@ _HARBOR_ASSET = {
     "issuer_id": HARBOR_ISSUER,
     "blockchain_network": "stellar-mainnet",
     "stellar_asset_code": "HBBOND",
-    "stellar_issuer_public_key": "GBVERHXLKQNF5ZPAW7MXJTDYRVCSUIQENBAHAGKFZ3PLMWT2YDRUQQXY",
+    "stellar_issuer_public_key": "GCTZS7UU3ELEP4YJH37FC2PFYSWNXHTTUROVHLEFBHHF4IUNGVLL7Y4B",
     "issuer_organization_name": "Harbor Municipal Bonds Ltd",
     "asset_type": "bond",
     "jurisdiction": "GB",
@@ -69,6 +71,7 @@ _HARBOR_ASSET = {
 ADMIN_TOKEN = "test-admin-token"
 ISSUER_TOKEN = "test-issuer-token"
 LEGAL_TOKEN = "test-legal-token"
+SECOND_LEGAL_TOKEN = "test-second-legal-token"
 AI_TOKEN = "test-ai-token"
 OTHER_ISSUER_TOKEN = "test-other-issuer-token"
 OTHER_LEGAL_TOKEN = "test-other-legal-token"
@@ -83,7 +86,8 @@ def build_test_access_config(extra_clients: list[dict] | None = None) -> dict:
     """Access configuration dictionary (same schema as access_control.json)."""
     return {
         "issuers": [
-            {"id": MERIDIAN_ISSUER, "name": "Meridian Property Holdings LLC"},
+            # Meridian has authorized external AI processing (Stage 10A-2); the other issuers have not
+            {"id": MERIDIAN_ISSUER, "name": "Meridian Property Holdings LLC", "external_ai_processing": True},
             {"id": HARBOR_ISSUER, "name": "Harbor Municipal Bonds Ltd"},
             {"id": AGROCOMM_ISSUER, "name": "AgroComm Finance SA"},
             {"id": TESTNET_ISSUER, "name": "Testnet Property Fund"},
@@ -97,6 +101,10 @@ def build_test_access_config(extra_clients: list[dict] | None = None) -> dict:
             {"user_id": "bob-martinez-01", "display_name": "Bob Martinez",
              "role": "independent_legal_reviewer", "issuer_ids": [MERIDIAN_ISSUER],
              "token_sha256": hash_token(LEGAL_TOKEN)},
+            # A second legal reviewer of Meridian: approves what Bob corrected (Stage 9B-5C, self-review)
+            {"user_id": "grace-osei-01", "display_name": "Grace Osei",
+             "role": "independent_legal_reviewer", "issuer_ids": [MERIDIAN_ISSUER],
+             "token_sha256": hash_token(SECOND_LEGAL_TOKEN)},
             # Specific to the code-layer test: user_id starts with "ai-" → approval is rejected with 403
             {"user_id": "ai-extraction-service", "display_name": "AI Extraction Service",
              "role": "issuer_reviewer", "issuer_ids": [MERIDIAN_ISSUER],
@@ -183,6 +191,13 @@ async def client(async_db: AsyncSession, tmp_path) -> AsyncClient:
     app.dependency_overrides[get_rate_limiter] = lambda: test_limiter
     app.dependency_overrides[get_extraction_rate_limiter] = lambda: test_extraction_limiter
     app.dependency_overrides[get_access_registry] = lambda: TEST_REGISTRY
+    # Stellar anchoring: never the real account file and never the real network in tests
+    # (tests/test_stellar_anchoring.py overrides this with a fake Horizon)
+    unconfigured_anchoring = StellarAnchorService(
+        str(tmp_path / "no-anchor-account.json"), base_fee=1000, tx_timeout_seconds=300,
+        transport=httpx.MockTransport(_no_network),
+    )
+    app.dependency_overrides[get_anchor_service] = lambda: unconfigured_anchoring
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -190,6 +205,10 @@ async def client(async_db: AsyncSession, tmp_path) -> AsyncClient:
         yield ac
 
     app.dependency_overrides.clear()
+
+
+def _no_network(request):
+    raise AssertionError(f"tests must not reach the network: {request.url}")
 
 
 async def _role_client(token: str):
@@ -282,6 +301,12 @@ def issuer_headers() -> dict:
 def legal_headers() -> dict:
     """Bearer token header of the independent legal expert (Bob Martinez, Meridian)."""
     return bearer(LEGAL_TOKEN)
+
+
+@pytest.fixture
+def second_legal_headers() -> dict:
+    """A second independent legal expert of Meridian (Grace Osei)."""
+    return bearer(SECOND_LEGAL_TOKEN)
 
 
 @pytest.fixture

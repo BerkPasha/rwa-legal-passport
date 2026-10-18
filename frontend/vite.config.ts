@@ -12,6 +12,9 @@ declare module 'vite' {
 
 export default defineConfig({
   plugins: [react()],
+  // Hashed build files live under /static/, so that they can never collide with the application's
+  // /assets/<id> routes, and a host can cache them as immutable (DEPLOYMENT.md)
+  build: { assetsDir: 'static' },
   test: {
     globals: true,
     environment: 'jsdom',

@@ -1,7 +1,7 @@
 {
   "issuers": [
-    { "id": "example-issuer", "name": "Example Issuer Holdings LLC" },
-    { "id": "second-issuer", "name": "Second Issuer Ltd" }
+    { "id": "example-issuer", "name": "Example Issuer Holdings LLC", "external_ai_processing": false },
+    { "id": "second-issuer", "name": "Second Issuer Ltd", "external_ai_processing": false }
   ],
   "users": [
     {

@@ -35,7 +35,7 @@ async def create_asset(
     # An asset can only be bound to an issuer defined in the access registry
     if payload.issuer_id not in registry.issuers:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="issuer_id does not match an issuer registered in the access configuration.",
         )
     if not principal.can_access_issuer(payload.issuer_id):

@@ -37,7 +37,8 @@ class _BlockchainMeta(BaseModel):
         if not is_valid_stellar_public_key(v):
             raise ValueError(
                 "stellar_issuer_public_key must be a valid 56-character Stellar public key "
-                "starting with 'G' and containing only RFC 4648 base32 characters (A-Z, 2-7)."
+                "starting with 'G' and containing only RFC 4648 base32 characters (A-Z, 2-7), "
+                "with a valid StrKey checksum."
             )
         return v
 
