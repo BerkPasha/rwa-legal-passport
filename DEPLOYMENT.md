@@ -55,6 +55,7 @@ visitor ──HTTPS──> reverse proxy (Caddy, TLS)            one public orig
 
 | Setting | Value | Why |
 |---|---|---|
+| `APP_ENV` | `production-showcase` | A publicly reachable server: the production profile and its startup checks (§8) |
 | `READ_ONLY_MODE` | `true` | Every write refused with 403 before authentication |
 | `API_DOCS_ENABLED` | `false` | No public API documentation |
 | `SYNTHETIC_DATA_NOTICE` | `true` | Every page says the data is synthetic |
@@ -83,7 +84,7 @@ The working directory is the bundle's `deploy/` directory: the repository's `.en
 
 **What the rehearsal runs:**
 - It builds a bundle into a temporary directory.
-- It starts the backend with the command line above and the bundle's settings (only `APP_ENV` differs, to identify the run).
+- It starts the backend with the command line above and the bundle's settings. Only `APP_ENV`'s label differs, to identify the run: `production-e2e-rehearsal` keeps the bundle's production profile, so the production startup checks (§8) run on the bundle's own settings.
 - It starts the stand-in proxy, which applies the Caddyfile's rules: `/api` → backend, `/static/*` immutable, everything else `index.html`, the site's CSP and headers, no server banner, 405 for writes to static paths.
 
 **What `frontend/e2e/rehearsal/rehearsal.e2e.ts` checks in Chromium:**
@@ -145,3 +146,54 @@ The working directory is the bundle's `deploy/` directory: the repository's `.en
 - **Not an integrity check.** The probe verifies no document digest, evidence manifest or Stellar anchor, and contacts no external service. Each component has 3 seconds, and the components are checked concurrently.
 - **Probe the backend directly** at `http://127.0.0.1:8000/ready`. The proxy also forwards `/api/ready`, which reveals nothing. With `CLIENT_RATE_LIMIT_PER_MINUTE` set, the probe counts against the probing address, so keep the limit above the probe rate.
 - **Limits:** `SELECT 1` proves the database answers, not that its tables are intact. The startup schema check covers that when the server starts. On Windows, `os.access` cannot detect a directory without write permission.
+
+## 8. Deployment profiles and startup checks (Stage 10C-3B, T3)
+
+`APP_ENV` selects a profile: `<profile>` or `<profile>-<label>`. The label (lowercase letters, digits and hyphens) only identifies the server, for example `production-showcase`; `/health` reports the whole value.
+
+| Profile | Meant for | Startup checks |
+|---|---|---|
+| `development` (default) | This computer, interactive work | None. API docs on, the local frontend origins, no per-client limits |
+| `test` | This computer, disposable automated runs (pytest, `scripts/e2e_run.py`) | None |
+| `staging` | A private server for a limited audience | Enforced (below) |
+| `production` | A publicly reachable server, such as the showcase | Enforced (below) |
+| anything else | — | **Refused**, so a typo (`prod`, `Production`, `stage`) never runs as development |
+
+**Rules of `staging` and `production`.** The checks run first at startup, before the registry, the database or the storage is touched. If one fails, the server does not start. `READ_ONLY_MODE` changes none of these rules.
+
+| Setting | `staging` | `production` |
+|---|---|---|
+| `API_DOCS_ENABLED` | Must be set explicitly. `true` is accepted for a private staging server | Must be `false` |
+| `CORS_ALLOWED_ORIGINS` | Must be set explicitly (empty = same-origin only). Each origin must be `https`, or `http` on a loopback host (for a tunnel) | Must be set explicitly (empty = same-origin only). Each origin must be `https` on a non-loopback host |
+| `CLIENT_RATE_LIMIT_PER_MINUTE` | 1 to 1000 | 1 to 1000 |
+| `AUTH_FAILURE_LIMIT_PER_MINUTE` | 1 to 100 | 1 to 100 |
+
+Wildcard and malformed origins are refused in every profile, as before.
+
+**Why these ceilings.** `ClientRateLimiter` keeps one timestamp per counted event and address, and each request scans that address's last minute. A higher limit therefore costs memory and time per request without restricting anyone. The ceilings are about 3× and 10× the values rehearsed for the showcase (300 and 10). Tokens carry 256 random bits (`secrets.token_urlsafe(32)`), so the failure limit slows scripted guessing and reduces noise rather than being the only protection.
+
+**Limits that need no check.** The passport limit is fixed at 60 requests per minute and institutional client. The AI extraction limit (`EXTRACTION_RATE_LIMIT_PER_HOUR`) cannot be 0. The body size limit cannot be switched off.
+
+**A refusal** is printed by uvicorn ("Application startup failed"), and the process exits with a non-zero code:
+
+```
+ERROR rwa_security deployment.configuration_refused profile=production settings=API_DOCS_ENABLED,CLIENT_RATE_LIMIT_PER_MINUTE
+app.deployment_checks.UnsafeDeploymentConfiguration: Refusing to start: unsafe configuration for the production profile. Correct these settings (DEPLOYMENT.md, section 8):
+  - API_DOCS_ENABLED: must be false in production (the interactive documentation would be public).
+  - CLIENT_RATE_LIMIT_PER_MINUTE: must be between 1 and 1000 in staging and production (0 turns the limit off; ...).
+ERROR:    Application startup failed. Exiting.
+```
+
+It names settings and rules only, never a configured value: no origin (only its position), path, key, token or the unrecognized `APP_ENV` value. Uvicorn's traceback around it shows source-code locations of the application, not configuration.
+
+**Proxy assumptions (unchanged in T3).** The application never reads `X-Forwarded-For` itself. Behind a proxy, uvicorn replaces the client address only for connections from `--forwarded-allow-ips`; uvicorn's default trusts only 127.0.0.1. Never use `--forwarded-allow-ips '*'`: any client could then choose the address the limits count. Without `--proxy-headers`, every visitor shares the proxy's address and its limit. Neither can be checked from inside the application, so both are documented here and in §3.
+
+**Not covered by these checks:**
+- `development` and `test` are for this computer only. Nothing stops a public server from being started with them, and the checks cannot see the address uvicorn binds to.
+- Running uvicorn with `--lifespan off` skips these checks, together with the existing registry and schema checks.
+- File locations (`DATABASE_URL`, `ACCESS_CONTROL_FILE`, `STORAGE_PATH`), the AI provider, `SYNTHETIC_DATA_NOTICE` and `MAX_UPLOAD_SIZE_MB` are not judged.
+- Assigned to later tasks of Stage 10C-3B:
+  - SQLite hardening (T4); a Horizon verification cache (T5);
+  - the frontend build's `VITE_API_URL` guard (T6); backup and restore (T7);
+  - a Python lock file (T8); the pypdf and Starlette upgrades (T9, T10);
+  - token expiry and rotation (T11); a rehearsal on a real host (T12).

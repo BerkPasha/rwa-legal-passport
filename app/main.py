@@ -9,6 +9,7 @@ from app.config import settings
 from app.db.base import Base
 from app.db.schema_check import verify_schema_columns
 from app.db.session import engine
+from app.deployment_checks import DEPLOYMENT_PROFILES, UnsafeDeploymentConfiguration, ensure_safe_configuration
 from app.middleware import (
     ApiDocsGateMiddleware,
     BodySizeLimitMiddleware,
@@ -81,6 +82,16 @@ _tags_metadata = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Staging and production refuse to start with unsafe settings, before anything is read or
+    # created (Stage 10C-3B, T3; app/deployment_checks.py). The log names settings, never values.
+    try:
+        profile = ensure_safe_configuration(settings)
+    except UnsafeDeploymentConfiguration as exc:
+        security_logger.error("deployment.configuration_refused profile=%s settings=%s",
+                              exc.profile, ",".join(exc.settings))
+        raise
+    security_logger.info("deployment.profile profile=%s checks=%s", profile,
+                         "passed" if profile in DEPLOYMENT_PROFILES else "not_applicable")
     # Refuse to start if the access configuration is invalid (fail-closed); warn if the file is missing
     access_path = Path(settings.access_control_file)
     if access_path.exists():

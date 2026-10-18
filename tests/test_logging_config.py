@@ -192,7 +192,7 @@ def run_disposable_server(work: Path) -> tuple[str, dict]:
     keep = {k: v for k, v in os.environ.items()
             if k.upper() in {"PATH", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
                               "PATHEXT", "COMSPEC", "WINDIR", "LOCALAPPDATA", "APPDATA", "HOME"}}
-    env = {**keep, "PYTHONUNBUFFERED": "1", "APP_ENV": "logging-check",
+    env = {**keep, "PYTHONUNBUFFERED": "1", "APP_ENV": "test-logging-check",
            "DATABASE_URL": f"sqlite+aiosqlite:///{(work / 'server.db').as_posix()}",
            "STORAGE_PATH": str(work / "storage"), "ACCESS_CONTROL_FILE": str(registry),
            "STELLAR_ANCHOR_SECRET_FILE": str(work / "no-anchor-account.json"), "AI_PROVIDER": "disabled",
@@ -209,7 +209,7 @@ def run_disposable_server(work: Path) -> tuple[str, dict]:
             deadline = time.monotonic() + 30
             while True:
                 try:
-                    if httpx.get(f"{base}/health", timeout=2).json().get("environment") == "logging-check":
+                    if httpx.get(f"{base}/health", timeout=2).json().get("environment") == "test-logging-check":
                         break
                 except (httpx.HTTPError, ValueError):
                     pass

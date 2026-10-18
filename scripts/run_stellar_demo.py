@@ -39,7 +39,7 @@ def main() -> int:
         return 2
 
     os.environ.update({
-        "APP_ENV": "demo",
+        "APP_ENV": "development-demo",
         "DATABASE_URL": f"sqlite+aiosqlite:///{(demo / 'demo.db').as_posix()}",
         "STORAGE_PATH": str(demo / "storage"),
         "ACCESS_CONTROL_FILE": str(demo / "access_control.json"),

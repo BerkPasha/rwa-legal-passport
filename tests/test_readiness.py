@@ -308,7 +308,7 @@ def test_a_real_uvicorn_server_reports_readiness(tmp_path: Path):
     keep = {k: v for k, v in os.environ.items()
             if k.upper() in {"PATH", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
                               "PATHEXT", "COMSPEC", "WINDIR", "LOCALAPPDATA", "APPDATA", "HOME"}}
-    env = {**keep, "PYTHONUNBUFFERED": "1", "APP_ENV": "readiness-check",
+    env = {**keep, "PYTHONUNBUFFERED": "1", "APP_ENV": "test-readiness-check",
            "DATABASE_URL": f"sqlite+aiosqlite:///{(tmp_path / 'server.db').as_posix()}",
            "STORAGE_PATH": str(storage), "ACCESS_CONTROL_FILE": str(registry),
            "STELLAR_ANCHOR_SECRET_FILE": str(tmp_path / "no-anchor-account.json"), "AI_PROVIDER": "disabled",
@@ -325,7 +325,7 @@ def test_a_real_uvicorn_server_reports_readiness(tmp_path: Path):
             deadline = time.monotonic() + 30
             while True:
                 try:
-                    if httpx.get(f"{base}/health", timeout=2).json().get("environment") == "readiness-check":
+                    if httpx.get(f"{base}/health", timeout=2).json().get("environment") == "test-readiness-check":
                         break
                 except (httpx.HTTPError, ValueError):
                     pass

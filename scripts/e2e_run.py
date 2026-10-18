@@ -139,13 +139,16 @@ class Stack:
 
     def __init__(self, name: str, root: Path, out: Path, offline: bool) -> None:
         self.name, self.root, self.out, self.offline = name, root, out, offline
+        # APP_ENV: the test profile, labelled with this run; /health names it, so a stale server
+        # on the same port is never mistaken for this one
+        self.app_env_value = f"test-e2e-{name}"
         self.api_port, self.web_port = _free_port(), _free_port()
         self.processes: list[subprocess.Popen] = []
         self._logs = []
 
     def app_env(self, database: Path, storage: Path, registry: Path, anchor_file: Path) -> dict:
         values = {
-            "APP_ENV": f"e2e-{self.name}",
+            "APP_ENV": self.app_env_value,
             "DATABASE_URL": f"sqlite+aiosqlite:///{database.as_posix()}",
             "STORAGE_PATH": str(storage),
             "ACCESS_CONTROL_FILE": str(registry),
@@ -171,7 +174,7 @@ class Stack:
             sys.executable, "-m", "uvicorn", "app.main:app", "--app-dir", str(ROOT),
             "--host", "127.0.0.1", "--port", str(self.api_port)], env, self.root)
         _wait_http(f"http://127.0.0.1:{self.api_port}/health", backend,
-                   lambda body: json.loads(body).get("environment") == f"e2e-{self.name}")
+                   lambda body: json.loads(body).get("environment") == self.app_env_value)
         node = shutil.which("node")
         dist = self.root / "dist"
         build = subprocess.run([node, "node_modules/vite/bin/vite.js", "build", "--outDir", str(dist), "--emptyOutDir",
@@ -212,7 +215,7 @@ class RehearsalStack(Stack):
             "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1", "--no-server-header", "--no-access-log"],
             env, deploy)
         _wait_http(f"http://127.0.0.1:{self.api_port}/health", backend,
-                   lambda body: json.loads(body).get("environment") == f"e2e-{self.name}")
+                   lambda body: json.loads(body).get("environment") == self.app_env_value)
         proxy = self._spawn("proxy", [
             sys.executable, str(ROOT / "deploy" / "rehearsal_proxy.py"), "--www", str(deploy / "www"),
             "--backend", f"http://127.0.0.1:{self.api_port}", "--port", str(self.web_port)], dict(os.environ), self.root)
@@ -227,7 +230,10 @@ def _prepare_rehearsal(stack: Stack) -> tuple[dict, dict]:
     settings = dict(line.split("=", 1) for line in
                     (stack.bundle / "deploy" / "showcase.env").read_text(encoding="utf-8").splitlines()
                     if line and not line.startswith("#"))
-    settings["APP_ENV"] = f"e2e-{stack.name}"   # identifies this run's server; every other setting is the bundle's
+    # Identifies this run's server, keeping the bundle's profile (production): its startup checks
+    # run on the bundle's settings. Every other setting is the bundle's.
+    stack.app_env_value = f"{settings['APP_ENV'].partition('-')[0]}-e2e-{stack.name}"
+    settings["APP_ENV"] = stack.app_env_value
     if stack.offline:
         closed = f"http://127.0.0.1:{_free_port()}"
         settings.update(HTTP_PROXY=closed, HTTPS_PROXY=closed, ALL_PROXY=closed, NO_PROXY="127.0.0.1,localhost")

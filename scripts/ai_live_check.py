@@ -400,7 +400,7 @@ def prepare_environment(root: Path, mode: str, args: argparse.Namespace) -> Envi
     """
     env = Environment(root=root, admin_token=secrets.token_urlsafe(32), reviewer_token=secrets.token_urlsafe(32))
     os.environ.update({
-        "APP_ENV": "ai-live-check",
+        "APP_ENV": "test-ai-live-check",
         "DATABASE_URL": f"sqlite+aiosqlite:///{(root / 'live_check.db').as_posix()}",
         "STORAGE_PATH": str(root / "storage"),
         "ACCESS_CONTROL_FILE": str(root / "access_control.json"),

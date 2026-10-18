@@ -51,7 +51,8 @@ import e2e_run  # noqa: E402  (paths, isolated environments and integrity helper
 ROOT, FRONTEND = e2e_run.ROOT, e2e_run.FRONTEND
 SHOWCASE_ISSUERS = {"e2e-meridian": "E2E Meridian Harbour Issuer (synthetic)", "e2e-harbor": "E2E Harbor Bonds Issuer (synthetic)"}
 SHOWCASE_SETTINGS = {
-    "APP_ENV": "showcase",
+    # A publicly reachable server: the production profile, whose startup checks these settings pass
+    "APP_ENV": "production-showcase",
     "DATABASE_URL": "sqlite+aiosqlite:///./data/showcase.db",
     "STORAGE_PATH": "./data/storage",
     "ACCESS_CONTROL_FILE": "./data/access_control.json",
@@ -127,7 +128,7 @@ def build(out: Path, with_stellar_demo: bool) -> dict:
 
     # 2. The synthetic dataset, through the real API, with build-time credentials discarded afterwards
     env = e2e_run._base_env(
-        APP_ENV="showcase-build", DATABASE_URL=f"sqlite+aiosqlite:///{(data / 'showcase.db').as_posix()}",
+        APP_ENV="test-showcase-build", DATABASE_URL=f"sqlite+aiosqlite:///{(data / 'showcase.db').as_posix()}",
         STORAGE_PATH=str(data / "storage"), ACCESS_CONTROL_FILE=str(data / "access_control.json"),
         STELLAR_ANCHOR_SECRET_FILE=str(data / "anchor_public.json"), AI_PROVIDER="disabled", ANTHROPIC_API_KEY="")
     seed = subprocess.run([sys.executable, str(ROOT / "scripts" / "e2e_seed.py"), str(data), "--public-showcase"],
