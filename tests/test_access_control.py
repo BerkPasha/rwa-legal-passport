@@ -84,6 +84,8 @@ EXPECTED_ROUTE_GUARDS: dict[tuple[str, str], str | None] = {
     ("POST", "/assets/{asset_id}/stellar-anchors/{anchor_id}/refresh"): "require_anchor_create",
     ("GET", "/assets/{asset_id}/stellar-anchors/verification"): "require_asset_read",
     ("GET", "/passport/{network}/{asset_code}/{issuer_key}/stellar-anchor"): "require_passport_read",
+    # The passport's history (versions, approvals, anchors): the same key, scope and rate limit
+    ("GET", "/passport/{network}/{asset_code}/{issuer_key}/history"): "require_passport_read",
 }
 
 BEARER_ROUTES = [

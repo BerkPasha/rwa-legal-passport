@@ -76,6 +76,7 @@ Institutional keys carry **operations** (currently only `passport:read`) and a s
 | GET | `/extractions/{extraction_id}/corrections` | `audit:read` | extraction → … → issuer |
 | GET | `/extractions/{extraction_id}/approvals` | `audit:read` | extraction → … → issuer |
 | GET | `/passport/{network}/{asset_code}/{issuer_key}` | API key with `passport:read` + 60 req/min | key's `issuer_ids` / `asset_ids` |
+| GET | `/passport/{network}/{asset_code}/{issuer_key}/history` | API key with `passport:read` + 60 req/min | key's `issuer_ids` / `asset_ids` |
 
 Not in the table: `/` (static welcome message) and FastAPI's `/docs`, `/redoc` and `/openapi.json`, which are still public. See §7.
 

@@ -573,3 +573,65 @@ export interface ServerInfo {
   synthetic_data: boolean
   api_docs: boolean
 }
+
+// ── Passport history: GET /passport/{network}/{asset_code}/{issuer_key}/history ──
+// Historical records for audit: only is_current approvals stand behind the current passport.
+
+export interface ApprovedClaimRecord {
+  field_name: string
+  value: string
+  is_unknown: boolean
+  source_page: number | null
+  supporting_passage: string | null
+}
+
+export interface ApprovalHistoryEntry {
+  approval_type: ApprovalType
+  reviewer_role: string
+  approved_at: string
+  binding_digest: string | null
+  is_current: boolean
+  stale_reasons: ApprovalStaleReason[]
+  counted_in_current_passport: boolean
+  approved_claims: ApprovedClaimRecord[]
+}
+
+export interface ApprovedVersionHistory {
+  extraction_id: string
+  document_version_number: number | null
+  extraction_source: ExtractionSource
+  approval_state: ExtractionApprovalStateValue
+  stale_reasons: ApprovalStaleReason[]
+  served_in_current_passport: boolean
+  approvals: ApprovalHistoryEntry[]
+}
+
+export interface DocumentVersionRecord {
+  version_number: number
+  sha256_hash: string
+  uploaded_at: string
+  is_current: boolean
+}
+
+export interface DocumentHistory {
+  document_id: string
+  title: string
+  document_type: string
+  status: string
+  current_version_number: number
+  versions: DocumentVersionRecord[]
+  approved_versions: ApprovedVersionHistory[]
+}
+
+// A stored anchoring record (not a live network check)
+export type AnchorHistoryEntry = NonNullable<AnchorVerification['anchor']> & { matches_current_evidence: boolean }
+
+export interface PassportHistory {
+  asset: LegalPassport['asset']
+  current_passport_available: boolean
+  current_manifest_digest: string | null
+  documents: DocumentHistory[]
+  anchors: AnchorHistoryEntry[]
+  disclaimer: string
+  retrieved_at: string
+}

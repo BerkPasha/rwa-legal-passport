@@ -4,6 +4,8 @@ Builds the deployable bundle of the read-only grant showcase (Stage 10C-2, DEPLO
     python scripts/build_showcase.py                       # synthetic data only
     python scripts/build_showcase.py --with-stellar-demo   # plus the genuine Stellar Testnet anchor of the
                                                            # local demo dataset (DEMO.md)
+    python scripts/build_showcase.py --with-stellar-demo --demo-dataset scratch/stellar-demo/demo-v2
+                                                           # the same, from the version 2 dataset
     python scripts/build_showcase.py --out <directory>     # default: scratch/showcase-bundle/<timestamp>
 
 Layout of the result:
@@ -103,8 +105,9 @@ def _registry(issuers: dict[str, str], scopes: dict[str, list[str]]) -> tuple[di
     return config, creds
 
 
-def build(out: Path, with_stellar_demo: bool) -> dict:
+def build(out: Path, with_stellar_demo: bool, demo_dataset: Path = e2e_run.DEMO_DATASET) -> dict:
     dev_before, demo_before = e2e_run._sha256_file(e2e_run.DEV_DATABASE), e2e_run._sha256_tree(e2e_run.DEMO_DATASET)
+    source_before = e2e_run._sha256_tree(demo_dataset)
     deploy, data = out / "deploy", out / "deploy" / "data"
     data.mkdir(parents=True)
     issuers = dict(SHOWCASE_ISSUERS)
@@ -112,7 +115,7 @@ def build(out: Path, with_stellar_demo: bool) -> dict:
 
     # 1. The genuine Testnet anchor's dataset, copied (the original is never written)
     if with_stellar_demo:
-        source = e2e_run.DEMO_DATASET
+        source = demo_dataset
         if not source.is_dir():
             raise SystemExit(f"REFUSED: the demo dataset {source} does not exist (DEMO.md)")
         shutil.copy2(source / "demo.db", data / "showcase.db")
@@ -192,7 +195,8 @@ def build(out: Path, with_stellar_demo: bool) -> dict:
     (deploy / "BUNDLE_MANIFEST.json").write_text(json.dumps(
         {"built_at": datetime.now().isoformat(timespec="seconds"), "with_stellar_demo": with_stellar_demo,
          "files": {p.relative_to(deploy).as_posix(): _sha256(p) for p in files}}, indent=2), encoding="utf-8")
-    if e2e_run._sha256_file(e2e_run.DEV_DATABASE) != dev_before or e2e_run._sha256_tree(e2e_run.DEMO_DATASET) != demo_before:
+    if (e2e_run._sha256_file(e2e_run.DEV_DATABASE) != dev_before or e2e_run._sha256_tree(e2e_run.DEMO_DATASET) != demo_before
+            or e2e_run._sha256_tree(demo_dataset) != source_before):
         raise SystemExit("REFUSED: the development database or the demo dataset changed")
     return {"bundle": str(out), "files": len(files), "with_stellar_demo": with_stellar_demo,
             "assets": sorted(a["stellar_asset_code"] for a in seeded["assets"].values())
@@ -203,6 +207,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Build the read-only grant showcase bundle (DEPLOYMENT.md)")
     parser.add_argument("--with-stellar-demo", action="store_true",
                         help="include the local demo dataset with its genuine Stellar Testnet anchor")
+    parser.add_argument("--demo-dataset", type=Path, default=e2e_run.DEMO_DATASET,
+                        help="the demo dataset to include (default: scratch/stellar-demo/demo; e.g. "
+                             "scratch/stellar-demo/demo-v2, the version 2 state anchored on 2026-10-20, DEMO.md)")
     parser.add_argument("--out", type=Path, help="an empty or new directory (default: scratch/showcase-bundle/<timestamp>)")
     args = parser.parse_args(argv)
     out = (args.out or ROOT / "scratch" / "showcase-bundle" / datetime.now().strftime("%Y%m%d-%H%M%S")).resolve()
@@ -210,7 +217,7 @@ def main(argv=None) -> int:
         print(f"REFUSED: {out} is not empty", file=sys.stderr)
         return 2
     out.mkdir(parents=True, exist_ok=True)
-    summary = build(out, args.with_stellar_demo)
+    summary = build(out, args.with_stellar_demo, args.demo_dataset.resolve())
     print(json.dumps(summary, indent=2))
     print(f"Hand {out / 'evaluator-credentials.txt'} to evaluators privately; deploy only {out / 'deploy'}.")
     return 0

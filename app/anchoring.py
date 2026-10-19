@@ -113,6 +113,17 @@ def anchor_response(anchor: StellarAnchor, service: StellarAnchorService) -> Ste
     )
 
 
+def anchor_summary(anchor: StellarAnchor, service: StellarAnchorService) -> AnchorSummary:
+    """The stored state of an anchor, as the institutional endpoints report it (no live check)."""
+    return AnchorSummary(
+        manifest_digest=anchor.manifest_digest, transaction_hash=anchor.transaction_hash,
+        status=AnchorStatus(anchor.status), anchor_account=anchor.anchor_account, data_name=anchor.data_name,
+        ledger=anchor.ledger, ledger_closed_at=_aware(anchor.ledger_closed_at),
+        anchored_at=_aware(anchor.created_at),
+        horizon_transaction_url=service.transaction_url(anchor.transaction_hash) if anchor.transaction_hash else None,
+    )
+
+
 def _check_identity(asset: Asset) -> None:
     if BlockchainNetwork(asset.blockchain_network) is not TESTNET:
         raise AnchorRefused(409, "mainnet_not_supported",
@@ -307,13 +318,7 @@ async def verify_passport_anchor(
         manifest_version=MANIFEST_VERSION,
         current_passport_available=current is not None,
         current_manifest_digest=current,
-        anchor=None if anchor is None else AnchorSummary(
-            manifest_digest=anchor.manifest_digest, transaction_hash=anchor.transaction_hash,
-            status=AnchorStatus(anchor.status), anchor_account=anchor.anchor_account, data_name=anchor.data_name,
-            ledger=anchor.ledger, ledger_closed_at=_aware(anchor.ledger_closed_at),
-            anchored_at=_aware(anchor.created_at),
-            horizon_transaction_url=service.transaction_url(anchor.transaction_hash) if anchor.transaction_hash else None,
-        ),
+        anchor=None if anchor is None else anchor_summary(anchor, service),
         evidence_matches_anchor=anchor is not None and current is not None and anchor.manifest_digest == current,
         onchain=onchain,
         result=result,

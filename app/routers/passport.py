@@ -2,6 +2,8 @@
 Institutional Legal Transparency Passport endpoint.
 
 GET /passport/{network}/{asset_code}/{issuer_key}
+GET /passport/{network}/{asset_code}/{issuer_key}/history        — versions, approvals, anchors (audit)
+GET /passport/{network}/{asset_code}/{issuer_key}/stellar-anchor — live check of the anchored commitment
 
 Returns currently approved information only — draft extractions are never shown.
 API key authentication and request rate limiting are applied.
@@ -51,12 +53,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.access_registry import InstitutionalClient, safe_log_id, security_logger
-from app.anchoring import verify_passport_anchor
+from app.anchoring import anchor_summary, verify_passport_anchor
 from app.api_keys import require_operation
 from app.approval_integrity import (
+    ApprovalCurrency,
     ExtractionApprovalSummary,
     ExtractionContext,
     load_extraction_context,
+    stored_evidence,
     summarize_extraction,
 )
 from app.db.session import get_db
@@ -74,25 +78,34 @@ from app.enums import (
     VerificationLevel,
 )
 from app.evidence import EVIDENCE_SCOPE, MATCH_METHOD, NORMALIZATION_VERSION, EvidenceVerification
+from app.evidence_manifest import ManifestUnavailable, build_manifest, manifest_digest
 from app.evidence_records import verify_claims_for_version
 from app.manual_claims import extraction_source
 from app.models.asset import Asset
 from app.models.document import Document, DocumentVersion
 from app.models.extraction import LegalClaim, LegalExtraction
 from app.models.review import ReviewApproval
+from app.models.stellar_anchor import StellarAnchor
 from app.permissions import InstitutionalOperation
 from app.rate_limit import InMemoryRateLimiter, get_rate_limiter
 from app.schemas.passport import (
     LEGAL_INTERPRETATION_NOT_ESTABLISHED,
     SOURCE_VERIFICATION_MEANING,
+    AnchorHistoryEntry,
     ApprovalEntry,
+    ApprovalHistoryEntry,
+    ApprovedClaimRecord,
     ApprovedSourceDocument,
+    ApprovedVersionHistory,
     AssetSummary,
+    DocumentHistory,
     DocumentReference,
+    DocumentVersionRecord,
     ExcludedDocument,
     ExtractionMetadata,
     LegalPassportResponse,
     LegalRightEntry,
+    PassportHistoryResponse,
     RightSource,
     VerificationSummary,
 )
@@ -404,6 +417,19 @@ def _verification_summary(entries: list[LegalRightEntry], sources: list[_Source]
     )
 
 
+def _asset_summary(asset: Asset) -> AssetSummary:
+    return AssetSummary(
+        asset_id=asset.id,
+        asset_code=asset.stellar_asset_code,
+        issuer_key=asset.stellar_issuer_public_key,
+        network=BlockchainNetwork(asset.blockchain_network),
+        issuer_organization=asset.issuer_organization_name,
+        asset_type=asset.asset_type,
+        jurisdiction=asset.jurisdiction,
+        status=asset.status,
+    )
+
+
 async def _scoped_passport_asset(
     network: str, asset_code: str, issuer_key: str, db: AsyncSession, client: InstitutionalClient,
     limiter: InMemoryRateLimiter,
@@ -592,16 +618,7 @@ async def get_legal_passport(
     )
 
     return LegalPassportResponse(
-        asset=AssetSummary(
-            asset_id=asset.id,
-            asset_code=asset.stellar_asset_code,
-            issuer_key=asset.stellar_issuer_public_key,
-            network=BlockchainNetwork(asset.blockchain_network),
-            issuer_organization=asset.issuer_organization_name,
-            asset_type=asset.asset_type,
-            jurisdiction=asset.jurisdiction,
-            status=asset.status,
-        ),
+        asset=_asset_summary(asset),
         verification_level=level,
         verification_status=_verification_status(legal_rights),
         legal_rights=legal_rights,
@@ -664,3 +681,187 @@ async def verify_passport_stellar_anchor(
         client.client_id, network, asset_code, verification.result.value,
     )
     return verification
+
+
+# ── History (MVP: historical versions for API consumers) ─────────────────────
+
+# An approval whose binding cannot be trusted does not show what it approved
+_UNTRUSTED_RECORD = {ApprovalStaleReason.binding_integrity_failed, ApprovalStaleReason.unbound_legacy_approval}
+
+
+def _approved_claims(approval: ReviewApproval, currency: ApprovalCurrency) -> list[ApprovedClaimRecord]:
+    """The claims exactly as the approval's own snapshot recorded them (format 1 or 2)."""
+    if _UNTRUSTED_RECORD & set(currency.reasons):
+        return []
+    fmt, data = stored_evidence(approval)
+    claims = data if fmt == 1 else data["claims"]
+    try:
+        return [
+            ApprovedClaimRecord(
+                field_name=c["field_name"],
+                value="unknown" if c["is_unknown"] else c["value"],
+                is_unknown=c["is_unknown"],
+                source_page=None if c["is_unknown"] else c["source_page"],
+                supporting_passage=None if c["is_unknown"] else c["supporting_passage"],
+            )
+            for c in claims
+        ]
+    except (KeyError, TypeError, ValueError):  # a format 1 list is not checked field by field
+        return []
+
+
+async def _document_history(
+    db: AsyncSession, document: Document, served: set[str], counted: set[str]
+) -> DocumentHistory:
+    versions = (
+        await db.execute(
+            select(DocumentVersion)
+            .where(DocumentVersion.document_id == document.id)
+            .order_by(DocumentVersion.version_number)
+        )
+    ).scalars().all()
+    approved_ids = (
+        await db.execute(
+            select(LegalExtraction.id)
+            .join(ReviewApproval, ReviewApproval.extraction_id == LegalExtraction.id)
+            .where(LegalExtraction.document_id == document.id)
+            .group_by(LegalExtraction.id)
+            .order_by(func.min(ReviewApproval.approved_at))
+        )
+    ).scalars().all()
+    approved: list[ApprovedVersionHistory] = []
+    for extraction_id in approved_ids:
+        ctx = await load_extraction_context(db, extraction_id)
+        summary = summarize_extraction(ctx)
+        approved.append(ApprovedVersionHistory(
+            extraction_id=extraction_id,
+            document_version_number=ctx.extraction_version.version_number if ctx.extraction_version else None,
+            extraction_source=extraction_source(ctx.extraction.ai_model),
+            approval_state=summary.state,
+            stale_reasons=summary.reasons,
+            served_in_current_passport=extraction_id in served,
+            approvals=[
+                ApprovalHistoryEntry(
+                    approval_type=a.approval_type,
+                    reviewer_role=a.reviewer_role,
+                    approved_at=a.approved_at,
+                    binding_digest=a.binding_digest,
+                    is_current=summary.currency[a.id].is_current,
+                    stale_reasons=summary.currency[a.id].reasons,
+                    counted_in_current_passport=a.id in counted,
+                    approved_claims=_approved_claims(a, summary.currency[a.id]),
+                )
+                for a in ctx.approvals
+            ],
+        ))
+    approved.sort(key=lambda h: h.document_version_number or 0)  # stable: approval order within a version
+    return DocumentHistory(
+        document_id=document.id,
+        title=document.title,
+        document_type=document.document_type,
+        status=document.status,
+        current_version_number=document.current_version_number,
+        versions=[
+            DocumentVersionRecord(
+                version_number=v.version_number,
+                sha256_hash=v.sha256_hash,
+                uploaded_at=v.created_at,
+                is_current=v.version_number == document.current_version_number,
+            )
+            for v in versions
+        ],
+        approved_versions=approved,
+    )
+
+
+@router.get(
+    "/passport/{network}/{asset_code}/{issuer_key}/history",
+    response_model=PassportHistoryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get the passport's history: document versions, every approval and the anchored manifests",
+    description=(
+        "The audit trail behind the passport, for the API consumer: every version of every document "
+        "of the asset (number, SHA-256, upload time), every extraction that was ever approved with "
+        "each approval record (current, stale or superseded, and why) and the claims it approved, and "
+        "every anchoring record of the evidence manifest (stored state).\n\n"
+        "**Historical records are not currently approved information.** A material change, such as a "
+        "new document version, makes the earlier approvals stale (`document_version_superseded`) "
+        "until the new version is reviewed and approved again; the history shows them, the passport "
+        "endpoint does not. Only `is_current` approvals stand behind the current passport, and only "
+        "`counted_in_current_passport` ones are counted by it. Unapproved drafts are never shown. "
+        "Answered also when no current passport exists (`current_passport_available` false), "
+        "including for an asset that is not active.\n\n"
+        "Anchors are reported as last stored by this server, with `matches_current_evidence`; the "
+        "live Stellar check is `GET /passport/{network}/{asset_code}/{issuer_key}/stellar-anchor`. "
+        "No reviewer identity, credential, document content or download link is included.\n\n"
+        "Authentication with the X-API-Key header (passport:read) and the same scope and rate limit "
+        "as the passport."
+    ),
+    responses={
+        401: {"description": "Invalid API key."},
+        403: {"description": "X-API-Key header missing, or the key lacks the passport:read permission."},
+        404: {"description": "Asset not found / out of scope."},
+        429: {"description": "Request rate limit exceeded."},
+    },
+)
+async def get_passport_history(
+    network: str,
+    asset_code: str,
+    issuer_key: str,
+    db: AsyncSession = Depends(get_db),
+    client: InstitutionalClient = Depends(require_operation(InstitutionalOperation.passport_read)),
+    limiter: InMemoryRateLimiter = Depends(get_rate_limiter),
+    storage: StorageService = Depends(get_storage),
+    anchors: StellarAnchorService = Depends(get_anchor_service),
+) -> PassportHistoryResponse:
+    asset = await _scoped_passport_asset(network, asset_code, issuer_key, db, client, limiter)
+
+    # What the passport serves now: the same evaluation as the passport and its manifest
+    try:
+        current_digest: str | None = manifest_digest(await build_manifest(db, asset, storage))
+    except ManifestUnavailable:
+        current_digest = None
+    sources = (await _evaluate_asset(db, asset, storage))[0] if current_digest else []
+    served = {s.ctx.extraction.id for s in sources}
+    counted = {a.id for s in sources for a in s.approvals}
+
+    documents = (
+        await db.execute(
+            select(Document).where(Document.asset_id == asset.id).order_by(Document.created_at, Document.id)
+        )
+    ).scalars().all()
+    history = [await _document_history(db, d, served, counted) for d in documents]
+    anchor_records = (
+        await db.execute(
+            select(StellarAnchor)
+            .where(StellarAnchor.asset_id == asset.id, StellarAnchor.network == asset.blockchain_network)
+            .order_by(StellarAnchor.created_at.desc(), StellarAnchor.id)
+        )
+    ).scalars().all()
+
+    logger.info(
+        "passport.history_served client_id=%s org=%s asset=%s/%s documents=%d approvals=%d anchors=%d current=%s",
+        client.client_id,
+        client.organization,
+        network,
+        asset_code,
+        len(history),
+        sum(len(v.approvals) for d in history for v in d.approved_versions),
+        len(anchor_records),
+        current_digest is not None,
+    )
+    return PassportHistoryResponse(
+        asset=_asset_summary(asset),
+        current_passport_available=current_digest is not None,
+        current_manifest_digest=current_digest,
+        documents=history,
+        anchors=[
+            AnchorHistoryEntry(
+                **anchor_summary(a, anchors).model_dump(),
+                matches_current_evidence=current_digest is not None and a.manifest_digest == current_digest,
+            )
+            for a in anchor_records
+        ],
+        disclaimer=PASSPORT_DISCLAIMER,
+        retrieved_at=datetime.now(timezone.utc),
+    )

@@ -1,10 +1,12 @@
-# Real-browser end-to-end tests (Stages 10B-1 to 10C-2)
+# Real-browser end-to-end tests (Stages 10B-1 to 10C-3B)
 
 Playwright drives **Playwright's Chromium** (full build, new headless mode; Chromium 153 with `@playwright/test` 1.63.0) against the **real backend** (uvicorn, the application as deployed) and a **production build** of the frontend (`vite build` + `vite preview`). The tests use the actual routes, components and API. Nothing in the browser is mocked, except three clearly marked negative tests that make the browser's own request fail (API unreachable, server error, and its recovery).
 
+**The browser tests run only on a disconnected computer** (Stage 10C-3B, see "Offline isolation" below). The runner refuses to start anything until its preflight has found the computer offline.
+
 ## Running
 
-Once:
+Once, while online:
 
 ```powershell
 cd frontend
@@ -12,35 +14,46 @@ npm install                     # installs @playwright/test (exact version, dev 
 npm run e2e:install-browser     # Playwright's Chromium, into %LOCALAPPDATA%\ms-playwright
 ```
 
-Every run, from the repository root:
+### Offline run
+
+Every run, from the repository root. **Start it while still online**: it prints the instructions first.
 
 ```powershell
-.venv\Scripts\python.exe scripts\e2e_run.py                      # synthetic + demo-offline
-.venv\Scripts\python.exe scripts\e2e_run.py --testnet-readonly   # + the live Stellar Testnet check (read-only)
-.venv\Scripts\python.exe scripts\e2e_run.py --grep "passport" --headed --keep-temp
+scripts\e2e_offline.cmd                                                   # for an operator: the window stays open
+.venv\Scripts\python.exe scripts\e2e_run.py --offline-host                # the same
+.venv\Scripts\python.exe scripts\e2e_run.py --offline-host --grep "passport" --headed --keep-temp
 ```
+
+1. Read the printed instructions. While the computer is offline, Claude Code and every other online tool stop working; the runner's window keeps running on its own.
+2. Disconnect the computer yourself: airplane mode on (Wi-Fi and Bluetooth off). No phone over USB, no Ethernet cable or dock, no VPN. The runner never changes network settings.
+3. The runner starts the servers and the browser only after three consecutive offline snapshots (about one a second). It waits up to `--offline-wait` seconds (default 600) and otherwise refuses without starting anything.
+4. Wait for the line `COMPLETE: every test process has stopped`. Only then turn airplane mode off. A `WARNING` line instead names processes to end in Task Manager before reconnecting.
+5. Back online, give Claude Code the run folder: `scratch\e2e\<run>\summary.json`.
 
 | Command | Purpose |
 |---|---|
 | `npm run e2e:typecheck` | Type-checks the E2E code (`frontend/e2e/tsconfig.json`) |
-| `npm run e2e` | Raw `playwright test`. It refuses to run without the context that `scripts/e2e_run.py` prepares |
+| `npm run e2e` | Raw `playwright test`. It refuses to run without the isolation and the context that `scripts/e2e_run.py` prepares |
 
 **Exit codes:**
-- 0: every environment passed;
-- 1: a test or check failed;
-- 2: refused (a prerequisite is missing).
+- 0: every environment passed, and the isolation evidence holds;
+- 1: a test, a check or the isolation evidence failed;
+- 2: refused, nothing was started (no `--offline-host`, `--testnet-readonly`, the computer still online, a Playwright browser already running, or a prerequisite missing).
 
-With `--grep`, the report-hygiene self-test may not run, so its check is skipped.
+The window of `e2e_offline.cmd` ends with the exit code and its meaning, for example `Exit code 1: FAILED - a test, a check or the isolation evidence failed.` These numbers are exit codes, never test counts: the counts are in each environment's `report.json`.
+
+With `--grep`, the report-hygiene self-test may not run, so its check is skipped. The isolation positive controls always run in full.
 
 ## Environments
 
 | Playwright project | Data | Network | Runs |
 |---|---|---|---|
+| `isolation` | The synthetic environment's stack | The positive controls of the offline isolation (`isolation/isolation.e2e.ts`) | First, before `synthetic`; the run stops if they fail |
 | `synthetic` | Seeded by `scripts/e2e_seed.py` through the real API: 2 tenants, 7 assets, synthetic PDFs, random fictional credentials | Offline: outbound HTTP of the backend is blocked | Always |
 | `showcase` | The same seed, served as a public read-only showcase would be: `READ_ONLY_MODE=true`, `SYNTHETIC_DATA_NOTICE=true`, `API_DOCS_ENABLED=false` (Stage 10C-1, [GRANT_DEMO.md](GRANT_DEMO.md)) | Offline | Always |
-| `rehearsal` | The deployable bundle of `scripts/build_showcase.py` (with the demo dataset's genuine anchor when it exists), run as on a server. The backend runs with the production flags and the bundle's settings, behind `deploy/rehearsal_proxy.py`: the static build, single-page routing and `/api` on one origin (Stage 10C-2, [DEPLOYMENT.md](DEPLOYMENT.md)) | Offline; live Stellar Testnet (read-only) with `--testnet-readonly` | Always |
+| `rehearsal` | The deployable bundle of `scripts/build_showcase.py` (with the demo dataset's genuine anchor when it exists), run as on a server. The backend runs with the production flags and the bundle's settings, behind `deploy/rehearsal_proxy.py`: the static build, single-page routing and `/api` on one origin (Stage 10C-2, [DEPLOYMENT.md](DEPLOYMENT.md)) | Offline | Always |
 | `demo-offline` | A copy of the local demo dataset `scratch/stellar-demo/demo` (DEMO.md), with its real Testnet anchor record | Offline | When the dataset exists locally |
-| `demo-testnet` | The same copy | Live Stellar Testnet, **read-only** (Horizon reads; no transaction) | Only with `--testnet-readonly` |
+| `demo-testnet` | The same copy | Live Stellar Testnet, **read-only** (Horizon reads; no transaction) | **Not run**: `--testnet-readonly` is refused, since the browser tests run only on a disconnected computer. The live branch of the rehearsal's anchor test is unreachable for the same reason |
 
 The synthetic seed:
 - **E2EMHT:** an approved passport.
@@ -66,22 +79,98 @@ The seed also writes `manual_journey.pdf` into the run's temporary directory. It
 
 ## How a run works (`scripts/e2e_run.py`)
 
+0. **Offline preflight and monitor** (see "Offline isolation"). Nothing below starts before it has succeeded, and the monitor stops every process of the run if the computer comes back online.
 1. **Temporary directory per environment.** It holds a new SQLite database, storage and access registry. The working directory of every Python process is that directory, so the repository's `.env` is never loaded, and every setting comes from the run's environment.
 2. **Seeding (synthetic)** goes through the real API in a separate interpreter (`scripts/e2e_seed.py`): upload validation, evidence check, approval gates. The demo environments use a copy of the dataset; the original is never written, and the run checks it is unchanged.
 3. **Backend:** `uvicorn app.main:app` on a free port chosen by the operating system (never 8000 or 5173). Readiness is the `/health` response naming this run's environment.
 4. **Frontend:** `vite build` into the temporary directory (with `VITE_API_URL` = that backend), then `vite preview` on another free port. `frontend/dist` is not touched.
-5. **Playwright** runs the environment's project: one worker, no retries, Chromium.
+5. **Playwright** runs the environment's project: one worker, no retries, Chromium, behind its own sinkhole and net-log directory. The synthetic environment first runs the `isolation` project.
 6. **Teardown.** Only the processes started by the run are stopped; nothing else is touched. Then:
+   - the isolation evidence of each Playwright invocation is judged (`network-evidence.json`);
    - every report file is scanned for the run's credentials (a file containing one fails the run, and is deleted);
    - the report-hygiene self-test's artifacts are checked (see below);
-   - the temporary directory is deleted;
+   - the temporary directory is deleted, with the raw net-logs;
    - the development database is checked byte for byte.
+7. **End of the run.** No Playwright browser process may be left, the computer must still be offline, and no adapter's sent counters may have grown. Then `COMPLETE` is printed. Windows keeps no counters for a disabled or absent adapter: when none could be compared, `summary.json` says that this check gave no evidence (`adapter_counter_evidence`), instead of reporting that nothing was sent.
 
 **Safety:**
 - `AI_PROVIDER=disabled` with an empty key, so no AI provider is contacted.
 - No Stellar signing key is reachable: every environment uses a verification-only account file (a public key, no seed). Anchoring is refused (503 `anchoring_not_configured`), and nothing can be submitted.
 - Offline environments set `HTTP(S)_PROXY` of the backend to a closed local port. Horizon is unreachable and is reported as unavailable, never as a success.
-- The browser talks to the run's frontend and API only. Anything else (for example the external font stylesheet of `index.html`) is answered locally with an empty response and listed in the report.
+- The browser talks to the run's frontend and API only. Any other request of any page of a test's context, popups and new tabs included, is refused in the browser (`route.abort`) and fails the test, unless it is a declared positive control.
+
+## Offline isolation (Stage 10C-3B)
+
+**Why.** A scratch experiment on 2026-10-19 showed that browser flags cannot be the boundary:
+- Chromium's DNS error page runs its own DNS diagnosis outside `--host-resolver-rules`. It sent a query for `google.com` to the system resolver and to the public resolver 8.8.8.8.
+- Playwright's Chromium (Chrome for Testing) contacts Google services on its own, despite Playwright's default switches: `clients2.google.com`, `update.googleapis.com`, `accounts.google.com`, `android.clients.google.com` and `www.google.com`. Earlier runs, which had no browser proxy, most probably made these connections. The first offline run found one more (see "Known Chromium background services" below).
+
+The boundary is therefore **the operating system's lack of an external route**: the operator disconnects the computer, and the runner verifies it.
+
+**Layers** (`scripts/e2e_isolation.py`, `frontend/playwright.config.ts`, `frontend/e2e/support.ts`):
+
+| Layer | What it does |
+|---|---|
+| Offline preflight | A snapshot of the Windows IP interfaces, addresses, routes and adapters (`Get-NetIPInterface`, `Get-NetIPAddress`, `Get-NetRoute`, `Get-NetAdapter`, `Get-NetAdapterStatistics`: local and read-only, nothing is sent). Offline means: loopback is the only connected interface, no route leads to a gateway (no default route), no other interface holds a usable address, and no hardware adapter is up. Anything else, including a state the check does not know or cannot read, refuses the run. Three consecutive offline snapshots are required |
+| Monitor | The same snapshot about once a second during the run. An unacceptable or unreadable state, or a silence of 10 s, stops every process the run started (with their children), and the run is invalid |
+| Sinkhole | Chromium's only proxy (`--proxy-server`, which also turns proxy auto-discovery off). It records the method and destination `host:port` of every request, never a path, query or header, and refuses it with 403. It opens no connection. One per Playwright invocation, on 127.0.0.1 |
+| Proxy bypass | `<-loopback>;127.0.0.1`: only the exact address of the run's servers is reached directly. `localhost` and `127.0.0.2` go to the sinkhole too |
+| Resolver rules | `MAP * ~NOTFOUND, EXCLUDE 127.0.0.1`: no other name, and no other address, resolves through Chromium's resolver |
+| Context route | Every page of a test's context, popups included, may reach the run's frontend and API only. Anything else is refused in the browser and fails the test |
+| Service workers | Blocked (`serviceWorkers: 'block'`): a service worker could answer requests that the route never sees |
+| Net-log | Each worker's Chromium writes its net-log. It is judged after the run, and deleted with the temporary directory, because it holds request headers |
+| End checks | No browser process left; the computer still offline; no adapter's sent counters grown (Windows counters, when it keeps any) |
+
+**Evidence categories** (`network-evidence.json` per invocation, `summary.json` → `offline_isolation`). Three kinds of event are kept apart and never treated as equivalent:
+
+| Category | Source | Verdict |
+|---|---|---|
+| Legitimate loopback traffic | Net-log connections and requests to 127.0.0.1 | Counted |
+| Refused attempt of a known Chromium background service | Sinkhole record of one of the `host:port` pairs of "Known Chromium background services" below, with no page of the run requesting that host, after a successful preflight; in the net-log, the method observed where one is listed | Reported, does not fail |
+| A known background host requested with a method never observed for it (a `POST` to Autofill) | Net-log | **Fails** |
+| Name mapped by the resolver rules (`~NOTFOUND`); Chromium's IPv6 reachability check refused locally (a UDP route lookup, no packet) | Net-log | Reported, does not fail |
+| Any other attempt refused by the sinkhole, including an unknown host or a known host on another port | Sinkhole | **Fails** |
+| An application request to an external address, even to a known background host | Net-log (initiated by a page), context route | **Fails** (the run; the test too) |
+| A direct connection attempt outside the sinkhole, refused locally (no route) | Net-log | **Fails** |
+| A DNS query outside the resolver rules: attempted without a packet, or transmitted | Net-log (Chromium's own DNS client) | **Fails**, with a distinct reason for each |
+| A name resolved outside the resolver rules | Net-log | **Fails** |
+| A transmitted packet: UDP bytes sent, or a TCP connection to a non-loopback address | Net-log | **Fails** |
+| A route available to a non-loopback address | Net-log (UDP route lookup that succeeded) | **Fails** |
+| A proxy configuration other than the sinkhole, or none stated | Net-log | **Fails** |
+| An adapter's sent counters grew during the run | Windows counters | **Fails** |
+| No adapter counters to compare (Windows keeps none for a disabled or absent adapter) | Windows counters | Reported as no evidence (`adapter_counter_evidence`), does not fail: the snapshots remain the evidence |
+| No net-log, or an unreadable one | — | **Fails** |
+
+**Known Chromium background services** (`KNOWN_BROWSER_BACKGROUND` in `scripts/e2e_isolation.py`). Each was reviewed and added on its own; any other host, or one of these on another port, fails the run.
+
+| `host:port` | Chromium service | First observed | Method |
+|---|---|---|---|
+| `clients2.google.com:80` | Network time | Scratch experiment, 2026-10-19 | Any |
+| `update.googleapis.com:443` | Component updates | Scratch experiment, 2026-10-19 | Any |
+| `accounts.google.com:443` | Sign-in | Scratch experiment, 2026-10-19 | Any |
+| `www.google.com:443` | The search engine | Scratch experiment, 2026-10-19 | Any |
+| `android.clients.google.com:443` | Device services | Scratch experiment, 2026-10-19 | Any |
+| `content-autofill.googleapis.com:443` | Autofill's field-type predictions for the forms on a page | First offline run (`20261019-204043`): 53 attempts across the four environments, all initiated by the browser and refused by the sinkhole. The isolation project showed none (its page has only the sidebar's two credential fields; why it showed none is not established) | `GET` only. An upload of a submitted form's structure would be a `POST`, and fails |
+
+**Positive controls** (`isolation/isolation.e2e.ts`, the `isolation` project). Every target is local by construction: names under `.isolation-probe.localhost`, which Chromium answers itself as loopback, and `127.0.0.2`. No probe leaves a page on a DNS error. They check that:
+- the run's servers are reached directly over 127.0.0.1;
+- requests that escape a page's interception reach only the sinkhole, which refuses them: HTTP, HTTPS (tunnel), an IP literal and a WebSocket. A listener on `127.0.0.2` proves nothing went around the sinkhole;
+- a popup to an external address is refused by the context route;
+- a rendered link and a hover produce at most a refused preconnect;
+- service workers cannot register;
+- an undeclared request fails the policy, and only positive-control hosts can be declared.
+
+The runner then requires the four probe destinations in the sinkhole (`REQUIRED_PROBES`) and forbids probe addresses in every other invocation. The verdict rules themselves are tested without a browser, on synthetic data, in `tests/test_e2e_isolation.py`.
+
+**Limits:**
+- **Browser-level controls alone cannot establish zero egress.** The sinkhole, the resolver rules and the route are a second line and the evidence; the boundary is the operating system's lack of a route.
+- **The checks are periodic, not continuous.** A connection that appears and disappears between two snapshots, and whatever is sent in the second or two before the monitor acts, is not prevented.
+- The snapshots rely on Windows' own interface, route and adapter reporting, and the counters on its drivers. They are not a packet capture. Packet capture with `pktmon` is a possible future evidence step; it needs administrator rights and separate approval, and is not used.
+- The Node.js side of the tests (Playwright's `request` fixture) and the Python child processes are covered by the operating system's isolation only, plus the backend's closed-port proxy.
+- Known Chromium background attempts still happen; they are refused, not prevented. Names of mapped resolutions are not in the net-log (it shows `~notfound`).
+- What a refused background attempt would have sent is not known: for HTTPS the sinkhole sees only the `CONNECT`, and the net-log, which is deleted with the temporary directory, is judged by method and destination only. By Chromium's design, Autofill's attempts concern the forms of the application's pages, but the browser, not the page, makes them.
+- Windows keeps no adapter counters for a disabled or absent adapter. On a computer disconnected that way, the counter check gives no evidence, and the summary says so.
+- The live Stellar Testnet checks (`demo-testnet`, the rehearsal's live branch) cannot run under this policy.
 
 ## What the tests cover
 
@@ -99,6 +188,7 @@ The seed also writes `manual_journey.pdf` into the run's temporary directory. It
 | G. External AI | `synthetic/ai-and-negative.e2e.ts` | The disabled provider is stated on the page. "Run AI Extraction" is disabled. The API refuses with 503 `ai_provider_disabled` and nothing is created. Seeded extractions are labelled as not AI |
 | Negatives | same | Tenant isolation by URL, wrong document or extraction reference, API unreachable, server error and recovery once the API answers again, back and forward navigation. Unknown address: a "Page not found" page with the navigation and no API request; this also applies to an unknown address under an asset |
 | Report hygiene | `synthetic/report-hygiene.e2e.ts` | A passing test, and a deliberately failing one (see "Credentials in reports") |
+| Offline isolation | `isolation/isolation.e2e.ts` | The positive controls of the isolation (see "Offline isolation") |
 | Deployment rehearsal | `rehearsal/rehearsal.e2e.ts` | Static serving: SPA deep links, immutable hashed files, a missing hashed file is 404, strict CSP, no server banner, no third-party request. The browser uses its own origin and `/api` only, with no CSP violation. The genuine Testnet commitment is verified only when Horizon confirms it (live run), and a synthetic asset is "Not anchored". Through the proxy: writes refused, docs hidden, no anonymous reads, tenant isolation. The frontend build holds no credential. Failed authentications are rate-limited (429) |
 | Read-only showcase | `showcase/showcase.e2e.ts` | Every page is labelled (read-only, synthetic, Testnet only, not production), and the explainer is shown. An anonymous visitor gets no data. An evaluator reads the manual-claims passport from document to approvals, with the PDF downloaded and hash-checked. Every write action is absent from the interface. The anchor states are shown as they are. Every write route (11) is refused by the server for every credential (operator, issuer, legal reviewer, none, invalid) and nothing changes. API docs answer 404, and responses carry the security headers |
 
@@ -133,8 +223,9 @@ The seed also writes `manual_journey.pdf` into the run's temporary directory. It
 | Network unavailable, record pending | E2EPND (offline) | "Stellar network unavailable", recorded status "Pending" marked as the server's record only, and a note that a pending transaction proves nothing until the ledger confirms it. "Refresh pending transaction" changes nothing. The legal reviewer is offered no transaction action (Stage 10B-3), only reading and re-checking, and the server refuses one (403) |
 | Record invalid | E2EINV | "Anchor record invalid", without any network check. Its stored "Confirmed" status and equal digest are not presented as proof ("its digest is not relied on") |
 | Network unavailable, real record | demo-offline | "Stellar network unavailable", never verified |
-| Verified | demo-testnet | Only when public Horizon independently shows the transaction, its account, ledger and memo digest |
-| Evidence changed | demo-testnet | After a material change to the asset in the run's copy, the same valid on-chain commitment is shown as "Evidence changed since anchoring" |
+| Outdated anchor after a new version | demo-offline (G, MVP update journey) | Serial, in the run's copy: **Upload New Version** of the prospectus → the approvals are no longer current, the passport answers 409 and the Passport History shows version 1 superseded and "Reapproval required" → a manual claim of version 2, the issuer attestation and the legal approval → the passport is current on version 2 → version 1's anchor: "Current evidence does not match the recorded commitment", "Does not match the current evidence" in the anchoring history, never verified. The offered anchoring is refused (verification-only server) and nothing is recorded |
+| Verified | demo-testnet (not run under the offline policy) | Only when public Horizon independently shows the transaction, its account, ledger and memo digest |
+| Evidence changed | demo-testnet (not run under the offline policy) | After a material change to the asset in the run's copy, the same valid on-chain commitment is shown as "Evidence changed since anchoring" |
 
 "Pending confirmation" (a pending record that Horizon does not yet return) needs a transaction that the live network has not yet included. No such transaction is created here, so that state is covered by the frontend unit tests only.
 
@@ -162,7 +253,11 @@ The scan checks that the prevention worked; it does not replace it.
 - `report.json`;
 - `artifacts/` (failure screenshots and the self-test's artifacts);
 - `backend.log`, `frontend.log`, `seed.log`;
-- `scratch/e2e/<run>/summary.json`.
+- `sinkhole.jsonl` (method and `host:port` only) and `network-evidence.json` (the isolation verdict);
+- `isolation/` in the synthetic environment: the positive controls' own report, sinkhole log and verdict;
+- `scratch/e2e/<run>/summary.json`, with `offline_isolation`: the preflight snapshot, the monitor, the final state, the adapter counters with what they show (`adapter_counter_evidence`) and the processes left.
+
+The raw Chromium net-logs hold request headers (the institutional key header among them). They stay in the temporary directory and are deleted with it (kept only with `--keep-temp`).
 
 ## Gaps
 
@@ -188,4 +283,4 @@ Still open:
 - A manual claim set is created with its claims in one request. The form sends one claim; further fields are added to the draft with the existing correction form.
 - The PDF is downloaded, not previewed in the page.
 - **Legal claims are reached per extraction (Documents → Review),** not from an asset-level claims section.
-- `index.html` loads an external font stylesheet. The tests answer it locally, so they never depend on it.
+- The offline isolation has not yet been exercised by a real offline run (Stage 10C-3B, phase 1 prepared it without starting a browser).

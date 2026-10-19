@@ -1,4 +1,4 @@
-import { test as base, expect, type Page, type APIRequestContext } from '@playwright/test'
+import { test as base, expect, type Page, type APIRequestContext, type BrowserContext } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 
 // Shared helpers of the real-browser end-to-end tests (E2E_TESTING.md). The context file is written
@@ -64,6 +64,26 @@ export const redact = (text: string) =>
 export const API_URL = process.env.E2E_API_URL ?? ''
 const LOCAL_ORIGINS = [new URL(process.env.E2E_BASE_URL ?? 'http://127.0.0.1').origin, API_URL && new URL(API_URL).origin]
 
+// ── Offline isolation (Stage 10C-3B, E2E_TESTING.md) ────────────────────────
+
+// Hosts of the isolation's positive controls (isolation/isolation.e2e.ts, scripts/e2e_isolation.py):
+// names under .localhost, which Chromium answers itself as loopback, so that even with every other
+// protection gone they could reach only this computer
+export const PROBE_SUFFIX = '.isolation-probe.localhost'
+
+// Every page of `context`, popups and new tabs included, may reach this run's frontend and API only.
+// Any other request is refused in the browser, before any network, and its origin recorded
+export async function blockExternal(context: BrowserContext, record: (origin: string) => void) {
+  await context.route(url => !LOCAL_ORIGINS.includes(url.origin), route => {
+    record(new URL(route.request().url()).origin)
+    return route.abort('blockedbyclient')
+  })
+}
+
+// The refused origins that no test declared: each fails the test that caused it
+export const undeclaredExternal = (origins: string[], declared: ReadonlySet<string>) =>
+  [...new Set(origins)].filter(origin => !declared.has(new URL(origin).hostname))
+
 // ── Diagnostics: browser console errors, page errors and failed requests ─────
 
 export class Diagnostics {
@@ -72,6 +92,7 @@ export class Diagnostics {
   readonly failedRequests: { method: string; path: string; status: number | string }[] = []
   readonly externalRequests: string[] = []
   private allowed: RegExp[] = []
+  private readonly declaredProbes = new Set<string>()
 
   constructor(page: Page) {
     page.on('console', message => { if (message.type() === 'error') this.consoleErrors.push(message.text()) })
@@ -95,18 +116,26 @@ export class Diagnostics {
     return [...this.pageErrors.map(e => `page error: ${e}`),
             ...this.consoleErrors.filter(e => !this.allowed.some(p => p.test(e)))]
   }
+
+  // Declares a positive control's external request (isolation/): still refused, but expected. Only
+  // positive-control hosts can be declared, so that no application request is ever let through
+  expectBlocked(host: string) {
+    if (!host.endsWith(PROBE_SUFFIX)) throw new Error(`only positive-control hosts (*${PROBE_SUFFIX}) can be declared, not ${host}`)
+    this.declaredProbes.add(host)
+  }
+
+  undeclaredExternal(): string[] {
+    return undeclaredExternal(this.externalRequests, this.declaredProbes)
+  }
 }
 
 export const test = base.extend<{ diagnostics: Diagnostics }>({
   diagnostics: [async ({ page }, use, testInfo) => {
     const diagnostics = new Diagnostics(page)
-    // The browser talks to this run's frontend and API only. Anything else (the stylesheet of an
-    // external font service, for example) is answered locally and recorded: the tests never depend
-    // on, or send anything to, a third party
-    await page.route(url => !LOCAL_ORIGINS.includes(url.origin), route => {
-      diagnostics.externalRequests.push(new URL(route.request().url()).origin)
-      return route.fulfill({ status: 204, body: '' })
-    })
+    // The browser talks to this run's frontend and API only. Any other request of any page of the
+    // test's context, popups included, is refused in the browser and fails the test, unless it is a
+    // declared positive control. Refused, not answered: an answered popup would stay invisible
+    await blockExternal(page.context(), origin => diagnostics.externalRequests.push(origin))
     await use(diagnostics)
     if (testInfo.status !== testInfo.expectedStatus || testInfo.status === 'failed') {
       // Before Playwright captures anything more of a failed page: no credential stays in an input
@@ -131,9 +160,10 @@ export const test = base.extend<{ diagnostics: Diagnostics }>({
         body: JSON.stringify(diagnostics.failedRequests, null, 2), contentType: 'application/json' })
     }
     if (diagnostics.externalRequests.length) {
-      await testInfo.attach('external-requests-answered-locally.json', {
+      await testInfo.attach('external-requests-refused.json', {
         body: JSON.stringify([...new Set(diagnostics.externalRequests)], null, 2), contentType: 'application/json' })
     }
+    expect(diagnostics.undeclaredExternal(), 'external requests of the application (refused in the browser)').toEqual([])
     expect(diagnostics.unexpected().map(redact), 'unexpected browser console or page errors').toEqual([])
   }, { auto: true }],
 })

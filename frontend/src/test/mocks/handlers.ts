@@ -10,6 +10,7 @@ import type {
   DocumentVersionText,
   LegalExtraction,
   LegalPassport,
+  PassportHistory,
   ReviewApproval,
   StellarAnchor,
 } from '../../types'
@@ -350,6 +351,35 @@ export const MOCK_ANCHOR_VERIFICATION: AnchorVerification = {
   checked_at: '2026-10-17T11:00:00Z',
 }
 
+// Same shape as the backend's PassportHistoryResponse (GET /passport/.../history): one document,
+// version 1 approved twice and served, and its anchor
+export const MOCK_PASSPORT_HISTORY: PassportHistory = {
+  asset: MOCK_PASSPORT.asset,
+  current_passport_available: true,
+  current_manifest_digest: MOCK_DIGEST,
+  documents: [{
+    document_id: 'doc-001', title: 'Q4 2024 Prospectus', document_type: 'prospectus', status: 'active',
+    current_version_number: 1,
+    versions: [{ version_number: 1, sha256_hash: 'a'.repeat(64), uploaded_at: '2024-01-01T00:00:00Z', is_current: true }],
+    approved_versions: [{
+      extraction_id: 'ext-001', document_version_number: 1, extraction_source: 'ai_service', approval_state: 'current',
+      stale_reasons: [], served_in_current_passport: true,
+      approvals: (['issuer_attestation', 'legal_verification'] as const).map((type, i) => ({
+        approval_type: type, reviewer_role: type === 'issuer_attestation' ? 'issuer_reviewer' : 'independent_legal_reviewer',
+        approved_at: `2024-01-0${i + 2}T00:00:00Z`, binding_digest: String(i + 1).repeat(64), is_current: true,
+        stale_reasons: [], counted_in_current_passport: true, approved_claims: [],
+      })),
+    }],
+  }],
+  anchors: [{
+    manifest_digest: MOCK_DIGEST, transaction_hash: MOCK_TX, status: 'confirmed', anchor_account: MOCK_ANCHOR_ACCOUNT,
+    data_name: 'lp:asset-001', ledger: 5241718, ledger_closed_at: '2026-10-17T10:16:17Z', anchored_at: '2026-10-17T10:16:12Z',
+    horizon_transaction_url: `https://horizon-testnet.stellar.org/transactions/${MOCK_TX}`, matches_current_evidence: true,
+  }],
+  disclaimer: BACKEND_PASSPORT_DISCLAIMER,
+  retrieved_at: '2026-10-17T11:00:00Z',
+}
+
 // GET /auth/me and GET /ai/status (Stage 10B-2): a signed-in issuer reviewer, and an available external provider
 export const MOCK_CURRENT_USER: CurrentUser = {
   user_id: 'issuer-reviewer-01', display_name: 'Test Issuer Reviewer', role: 'issuer_reviewer',
@@ -480,5 +510,11 @@ export const handlers = [
       return HttpResponse.json({ detail: 'API key required' }, { status: 403 })
     }
     return HttpResponse.json(MOCK_ANCHOR_VERIFICATION)
+  }),
+  http.get(`${BASE}/passport/:network/:assetCode/:issuerKey/history`, ({ request }) => {
+    if (!request.headers.get('X-API-Key')) {
+      return HttpResponse.json({ detail: 'API key required' }, { status: 403 })
+    }
+    return HttpResponse.json(MOCK_PASSPORT_HISTORY)
   }),
 ]

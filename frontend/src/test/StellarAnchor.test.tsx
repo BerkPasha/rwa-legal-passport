@@ -144,6 +144,39 @@ describe('Stellar evidence anchor on the asset page', () => {
     expect(within(card).queryByTestId('anchor-status-unconfirmed')).not.toBeInTheDocument()
   })
 
+  it('anchors the evidence of a re-approved new version; the earlier anchor never stands for it', async () => {
+    // Version 2 was approved again: the current evidence (digest f…) differs from version 1's anchor
+    const current = 'f'.repeat(64)
+    const v2 = { ...MOCK_STELLAR_ANCHOR, id: 'anchor-002', manifest_digest: current, transaction_hash: 'e'.repeat(64),
+                 created_at: '2026-10-20T09:00:00Z' }
+    let anchored = false
+    server.use(
+      http.get(`${BASE}/assets/:id/stellar-anchors/verification`, () => HttpResponse.json(anchored
+        ? verification({ current_manifest_digest: current,
+                         anchor: { ...MOCK_ANCHOR_VERIFICATION.anchor!, manifest_digest: current, transaction_hash: v2.transaction_hash } })
+        : verification({ result: 'evidence_changed', verified: false, evidence_matches_anchor: false,
+                         current_manifest_digest: current }))),
+      http.get(`${BASE}/assets/:id/stellar-anchors`, () =>
+        HttpResponse.json(anchored ? [v2, MOCK_STELLAR_ANCHOR] : [MOCK_STELLAR_ANCHOR])),
+      http.post(`${BASE}/assets/:id/stellar-anchors`, () => {
+        anchored = true
+        return HttpResponse.json(v2, { status: 201 })
+      }),
+    )
+    const card = await openAnchorTab()
+    expect(within(card).getByTestId('anchor-result-badge')).toHaveTextContent('Evidence changed since anchoring')
+    expect(screen.getAllByTestId('anchor-history-match').map(m => m.textContent)).toEqual(['Does not match the current evidence'])
+
+    vi.spyOn(window, 'confirm').mockReturnValueOnce(true)
+    await userEvent.click(screen.getByRole('button', { name: 'Anchor current evidence on Testnet' }))
+    expect(await screen.findByTestId('anchor-notice')).toHaveTextContent('Anchoring confirmed.')
+    await waitFor(() => expect(screen.getByTestId('anchor-result-badge')).toHaveTextContent('Commitment verified on Stellar Testnet'))
+    expect(screen.getByTestId('anchor-tx-hash')).toHaveTextContent(v2.transaction_hash)
+    expect(screen.getAllByTestId('anchor-history-match').map(m => m.textContent)).toEqual([
+      'Matches the current evidence', 'Does not match the current evidence'])
+    expect(screen.queryByRole('button', { name: 'Anchor current evidence on Testnet' })).not.toBeInTheDocument()
+  })
+
   it('asks for confirmation before submitting a Testnet transaction and explains a refusal', async () => {
     let posts = 0
     server.use(

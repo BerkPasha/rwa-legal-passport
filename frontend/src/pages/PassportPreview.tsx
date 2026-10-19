@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { getLegalPassport, getPassportAnchorVerification, ApiError } from '../api'
-import type { AnchorVerification, ApprovalType, LegalPassport, BlockchainNetwork, ReviewerRole } from '../types'
+import { getLegalPassport, getPassportAnchorVerification, getPassportHistory, ApiError } from '../api'
+import type { AnchorVerification, ApprovalType, LegalPassport, BlockchainNetwork, PassportHistory, ReviewerRole } from '../types'
 import { EVIDENCE_SCOPE_NOTE, evidenceStatusLabel } from '../evidence'
 import {
   ApprovalTypeBadge,
@@ -11,6 +11,7 @@ import {
 } from '../components/StatusBadge'
 import { DisclaimerBanner } from '../components/DisclaimerBanner'
 import { EvidenceAnchorCard } from '../components/EvidenceAnchorCard'
+import { PassportHistoryCard } from '../components/PassportHistoryCard'
 import { Spinner } from '../components/Spinner'
 import { useAuth } from '../AuthContext'
 
@@ -315,36 +316,51 @@ export function PassportPreview() {
   const [passport, setPassport] = useState<LegalPassport | null>(null)
   const [anchor, setAnchor] = useState<AnchorVerification | null>(null)
   const [anchorError, setAnchorError] = useState('')
+  const [history, setHistory] = useState<PassportHistory | null>(null)
+  const [historyError, setHistoryError] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  // 409: approvals exist, but none is current any more (e.g. a new document version awaits approval)
+  const [notCurrent, setNotCurrent] = useState(false)
 
   const effectiveKey = keyOverride.trim() || apiKey
 
-  const handleLookup = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const lookup = async () => {
     if (!effectiveKey) {
       setError('An institutional API key is required. Enter one below or set it via Credentials in the sidebar.')
       return
     }
     setLoading(true)
     setError('')
+    setNotCurrent(false)
     setPassport(null)
     setAnchor(null)
     setAnchorError('')
+    setHistory(null)
+    setHistoryError('')
     const code = assetCode.trim().toUpperCase()
     const issuer = issuerKey.trim()
-    // The passport and its Stellar evidence commitment are read independently: the commitment is
-    // shown even when no approved passport is current (e.g. after the evidence changed)
-    const [passportResult, anchorResult] = await Promise.allSettled([
+    // The passport, its Stellar evidence commitment and its history are read independently: the
+    // commitment and the history are shown even when no approved passport is current
+    const [passportResult, anchorResult, historyResult] = await Promise.allSettled([
       getLegalPassport(network, code, issuer, effectiveKey),
       getPassportAnchorVerification(network, code, issuer, effectiveKey),
+      getPassportHistory(network, code, issuer, effectiveKey),
     ])
     if (passportResult.status === 'fulfilled') {
       setPassport(passportResult.value)
     } else if (passportResult.reason instanceof ApiError) {
       setError(`${passportResult.reason.status}: ${passportResult.reason.message}`)
+      setNotCurrent(passportResult.reason.status === 409)
     } else {
       setError('Lookup failed — check network and credentials.')
+    }
+    if (historyResult.status === 'fulfilled') {
+      setHistory(historyResult.value)
+    } else if (!(historyResult.reason instanceof ApiError && historyResult.reason.status === 404)) {
+      setHistoryError(historyResult.reason instanceof ApiError
+        ? `Passport history unavailable — ${historyResult.reason.status}: ${historyResult.reason.message}`
+        : 'Passport history unavailable — the server could not be reached.')
     }
     if (anchorResult.status === 'fulfilled') {
       setAnchor(anchorResult.value)
@@ -355,6 +371,19 @@ export function PassportPreview() {
     }
     setLoading(false)
   }
+
+  const handleLookup = (e: React.FormEvent) => {
+    e.preventDefault()
+    void lookup()
+  }
+
+  // Opened from an asset page's "View Passport History" link: the lookup runs once by itself
+  const autoRun = useRef(params.get('view') === 'history')
+  useEffect(() => {
+    if (!autoRun.current || !assetCode || !issuerKey) return
+    autoRun.current = false
+    void lookup()
+  }, [])
 
   return (
     <div className="space-y-6">
@@ -428,7 +457,13 @@ export function PassportPreview() {
 
           {error && (
             <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200">
-              {error}
+              <p>{error}</p>
+              {notCurrent && (
+                <p data-testid="passport-not-current-note" className="mt-1">
+                  No passport is served until the changed documents are reviewed and approved again.
+                  {history ? ' Passport History below shows which version changed and what requires reapproval.' : ''}
+                </p>
+              )}
             </div>
           )}
 
@@ -451,6 +486,12 @@ export function PassportPreview() {
       {anchorError && (
         <div data-testid="anchor-lookup-error" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-amber-200">
           {anchorError}
+        </div>
+      )}
+      {history && <PassportHistoryCard history={history} />}
+      {historyError && (
+        <div data-testid="history-lookup-error" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-amber-200">
+          {historyError}
         </div>
       )}
     </div>

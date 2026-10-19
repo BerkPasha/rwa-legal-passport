@@ -100,14 +100,14 @@ The interface is English-only. `npm run build` writes the production build to `f
 pytest -v                      # backend: uses in-memory or scratch databases, never rwa_legal_passport.db
 cd frontend; npm test          # frontend (Vitest)
 cd frontend; npx tsc --noEmit  # type check
-python scripts/e2e_run.py      # real-browser end-to-end tests (Playwright + Chromium, isolated servers)
+python scripts/e2e_run.py --offline-host   # real-browser end-to-end tests (Playwright + Chromium), on a disconnected computer
 ```
 
-The end-to-end tests start their own backend and frontend on free ports, with a temporary database and fictional credentials. See **[E2E_TESTING.md](E2E_TESTING.md)**.
+The end-to-end tests start their own backend and frontend on free ports, with a temporary database and fictional credentials. They run only once the computer's external networking is switched off: the runner prints the instructions and waits for it. See **[E2E_TESTING.md](E2E_TESTING.md)**.
 
 For a local grant demo, `python scripts/grant_demo.py` serves a read-only showcase of the synthetic dataset on this computer only, and deletes it when stopped. The procedure, the read-only showcase and evaluator sandbox designs, and the deployment security audit are in **[GRANT_DEMO.md](GRANT_DEMO.md)**. The deployable showcase bundle (`scripts/build_showcase.py`), the proposed reverse proxy and service configuration (`deploy/`), the local deployment rehearsal and the dependency audit are in **[DEPLOYMENT.md](DEPLOYMENT.md)**. Nothing is deployed.
 
-No test makes a paid AI call or contacts the Stellar network: both are replaced by mocks or blocked. The only exception is the opt-in `scripts/e2e_run.py --testnet-readonly`, which reads Stellar Testnet without submitting anything.
+No test makes a paid AI call or contacts the Stellar network: both are replaced by mocks or blocked. The former opt-in live check, `scripts/e2e_run.py --testnet-readonly`, is now refused, because the browser tests run only on a disconnected computer.
 
 ---
 

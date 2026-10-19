@@ -33,12 +33,14 @@ from app.enums import (
     AssetStatus,
     BlockchainNetwork,
     EvidenceStatus,
+    ExtractionApprovalState,
     ExtractionSource,
     ReviewerAttestationStatus,
     SourceVerificationStatus,
     ValueOrigin,
     VerificationLevel,
 )
+from app.schemas.stellar_anchor import AnchorSummary
 
 SOURCE_VERIFICATION_MEANING = (
     "Source-text verification establishes only that the quotation appears on the cited page of "
@@ -364,3 +366,117 @@ class LegalPassportResponse(BaseModel):
     # Mandatory in every response — passport ≠ legal certificate
     disclaimer: str = Field(description="Legal disclaimer — mandatory in every response.")
     retrieved_at: datetime = Field(description="Timestamp when this passport was retrieved (UTC).")
+
+
+# ── Passport history (MVP: historical versions for API consumers) ────────────────
+
+
+class ApprovedClaimRecord(BaseModel):
+    """One claim exactly as an approval recorded it (the approval's own historical snapshot)."""
+    field_name: str = Field(description="Legal field name (e.g. ownership_nature).")
+    value: str = Field(description="Value as approved; 'unknown' if it was approved as unknown.")
+    is_unknown: bool = Field(description="If True, the claim was approved as unknown.")
+    source_page: Optional[int] = Field(default=None, description="Cited page, as approved.")
+    supporting_passage: Optional[str] = Field(default=None, description="Quotation, as approved.")
+
+
+class ApprovalHistoryEntry(BaseModel):
+    """One approval record, current or not. Approval records are never modified or deleted."""
+    approval_type: ApprovalType = Field(description="issuer_attestation or legal_verification (internal attestations).")
+    reviewer_role: str = Field(description="Role of the reviewer.")
+    approved_at: datetime = Field(description="Approval timestamp (UTC).")
+    binding_digest: Optional[str] = Field(
+        default=None,
+        description="SHA-256 over the approved binding (unkeyed, not a signature); null for a legacy approval without binding.",
+    )
+    is_current: bool = Field(
+        description="The approval's binding still matches the live records (re-evaluated on every read)."
+    )
+    stale_reasons: list[ApprovalStaleReason] = Field(
+        description="Why the approval is no longer current (e.g. document_version_superseded); empty if current."
+    )
+    counted_in_current_passport: bool = Field(
+        description=(
+            "The current passport counts this approval: one per reviewer and extraction, never a legal "
+            "approval of the reviewer's own correction."
+        )
+    )
+    approved_claims: list[ApprovedClaimRecord] = Field(
+        description=(
+            "The claims as this approval recorded them. Empty when the record's binding cannot be "
+            "trusted (binding_integrity_failed, unbound_legacy_approval). A historical record: it is "
+            "currently approved information only while is_current is true."
+        )
+    )
+
+
+class ApprovedVersionHistory(BaseModel):
+    """An extraction of one document version that received at least one approval."""
+    extraction_id: str = Field(description="Internal extraction identifier.")
+    document_version_number: Optional[int] = Field(
+        default=None, description="Document version the extraction was performed on; null if that version is missing."
+    )
+    extraction_source: ExtractionSource = Field(description="'manual' (typed by a user) or 'ai_service'.")
+    approval_state: ExtractionApprovalState = Field(
+        description=(
+            "current (a current approval exists), stale (none is current; a re-review can restore it) "
+            "or superseded (a newer document version exists; only a new extraction can be approved)."
+        )
+    )
+    stale_reasons: list[ApprovalStaleReason] = Field(description="Reasons of a stale or superseded state.")
+    served_in_current_passport: bool = Field(
+        description="This extraction is what the current passport serves for its document."
+    )
+    approvals: list[ApprovalHistoryEntry] = Field(description="Every approval of the extraction, oldest first.")
+
+
+class DocumentVersionRecord(BaseModel):
+    """One uploaded version of a document (metadata only: no content, no download link)."""
+    version_number: int = Field(description="Version number (1 = first upload).")
+    sha256_hash: str = Field(description="SHA-256 of the stored file of this version.")
+    uploaded_at: datetime = Field(description="Upload timestamp (UTC).")
+    is_current: bool = Field(description="True for the document's current version.")
+
+
+class DocumentHistory(BaseModel):
+    """A document of the asset: its versions and its approved extractions."""
+    document_id: str = Field(description="Internal document identifier.")
+    title: str = Field(description="Document title.")
+    document_type: str = Field(description="Document category.")
+    status: str = Field(description="Document status.")
+    current_version_number: int = Field(description="The document's current version.")
+    versions: list[DocumentVersionRecord] = Field(description="Every version, oldest first.")
+    approved_versions: list[ApprovedVersionHistory] = Field(
+        description="Every extraction that was ever approved, by document version. Unapproved drafts are never shown."
+    )
+
+
+class AnchorHistoryEntry(AnchorSummary):
+    """A stored anchoring record, as last observed by this server (not a live network check)."""
+    matches_current_evidence: bool = Field(
+        description="The anchored manifest digest equals the digest of the current passport's evidence manifest."
+    )
+
+
+class PassportHistoryResponse(BaseModel):
+    """
+    History of an asset's Legal Passport: every document version, every approval (current, stale or
+    superseded) with what it approved, and every anchored evidence manifest. For audit: only the
+    passport endpoint serves currently approved information.
+    """
+    asset: AssetSummary
+    current_passport_available: bool = Field(
+        description="The passport endpoint currently serves a passport (false: no current approval, or the asset is not active)."
+    )
+    current_manifest_digest: Optional[str] = Field(
+        default=None, description="SHA-256 of the current passport's evidence manifest; null without a current passport."
+    )
+    documents: list[DocumentHistory]
+    anchors: list[AnchorHistoryEntry] = Field(
+        description=(
+            "Anchoring records of the asset on its network, newest first: stored states, not re-checked "
+            "here. The live check is GET /passport/{network}/{asset_code}/{issuer_key}/stellar-anchor."
+        )
+    )
+    disclaimer: str = Field(description="Legal disclaimer — mandatory in every response.")
+    retrieved_at: datetime = Field(description="Timestamp when this history was retrieved (UTC).")

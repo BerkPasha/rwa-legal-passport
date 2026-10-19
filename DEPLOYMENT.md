@@ -78,9 +78,10 @@ The working directory is the bundle's `deploy/` directory: the repository's `.en
 ## 4. Local rehearsal (tested)
 
 ```powershell
-.venv\Scripts\python.exe scripts\e2e_run.py                      # includes the "rehearsal" environment (offline)
-.venv\Scripts\python.exe scripts\e2e_run.py --testnet-readonly   # the rehearsal reads Stellar Testnet live (read-only)
+.venv\Scripts\python.exe scripts\e2e_run.py --offline-host       # includes the "rehearsal" environment, on a disconnected computer
 ```
+
+The browser tests run only on a disconnected computer (Stage 10C-3B, [E2E_TESTING.md](E2E_TESTING.md) "Offline run"), so `--testnet-readonly` is refused and the rehearsal's live Testnet branch does not run.
 
 **What the rehearsal runs:**
 - It builds a bundle into a temporary directory.
@@ -92,7 +93,7 @@ The working directory is the bundle's `deploy/` directory: the repository's `.en
 2. **Browser behaviour:** the browser uses only its own origin and `/api`. A CSP violation would be a console error, which fails the test.
 3. **The genuine Testnet anchor:**
    - offline: "Stellar network unavailable";
-   - with `--testnet-readonly`: "Commitment verified on Stellar Testnet", confirmed independently on public Horizon (transaction, account, memo digest).
+   - live (`--testnet-readonly`, refused under the offline policy): "Commitment verified on Stellar Testnet", confirmed independently on public Horizon (transaction, account, memo digest).
 
    A synthetic asset of the same showcase shows "Not anchored".
 4. **Through the proxy:**

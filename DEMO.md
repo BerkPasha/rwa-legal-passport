@@ -78,7 +78,36 @@ Independent check, outside the application:
 
 In both, the memo (base64) decodes to the digest shown in the application.
 
+**History for the API consumer** (versions, every approval and the anchoring records; stored states, no network call). In the interface: the asset page → **View Passport History →** (it uses the institutional API key from the Credentials panel). Through the API:
+
+```powershell
+curl.exe -H "X-API-Key: test-inst-key-alpha" http://127.0.0.1:8000/passport/stellar-testnet/LPDEMO/GB5M55ZEKFTRJIU76EFLE3BMMHMUP2PWHFD77NCXOOO6GUDFEIF2RDCC/history
+```
+
+After a new document version is uploaded (*Documents & Extractions* → **Upload New Version** on the document, as the issuer reviewer or operator; or `POST /documents/{id}/versions`), the passport answers 409 and the history shows version 1's approvals as `superseded` (`document_version_superseded`) and the anchor with `matches_current_evidence: false`, until version 2 is reviewed and approved. Do this on a copy of the dataset (`--demo <copy>`): it changes the demo database.
+
 **Change detection** is shown by the original live run (`scratch/stellar-demo/original-run/e2e_report.json`): after a new document and after a tampered claim, the result was `evidence_changed` and nothing was verified.
+
+## 3b. Live re-anchoring after a new version (real Testnet transaction, needs approval)
+
+`run_stellar_demo.py` is verification-only and refuses anchoring. To anchor version 2's evidence, run the backend on a **copy** of the dataset with the signing account file `secrets/stellar_testnet_anchor.json` (Testnet only; the same account anchored version 1):
+
+```powershell
+Copy-Item -Recurse scratch\stellar-demo\demo scratch\stellar-demo\live-copy
+$env:APP_ENV = "development-demo"; $env:AI_PROVIDER = "disabled"; $env:ANTHROPIC_API_KEY = ""
+$env:DATABASE_URL = "sqlite+aiosqlite:///scratch/stellar-demo/live-copy/demo.db"
+$env:STORAGE_PATH = "scratch\stellar-demo\live-copy\storage"
+$env:ACCESS_CONTROL_FILE = "scratch\stellar-demo\live-copy\access_control.json"
+$env:STELLAR_ANCHOR_SECRET_FILE = "secrets\stellar_testnet_anchor.json"
+.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+1. As `test-issuer-token`: **Upload New Version** (for example `tests/fixtures/real_pdfs/trust_prospectus.pdf`), then **Add Manual Claim** with a quotation copied from the new version's page text, and approve it.
+2. As `test-legal-token`: add the independent approval. The passport is current again; its history shows version 1 as superseded.
+3. As `test-issuer-token`: *Stellar Evidence Anchor* → the result is "Evidence changed since anchoring" (version 1's anchor) → **Anchor current evidence on Testnet** → confirm. **This submits one real Testnet transaction.**
+4. The card then shows the new transaction (status, hash, explorer links, ledger) and "Current evidence matches the recorded commitment"; in *Anchoring History* only the new record says "Matches the current evidence".
+
+If Testnet was reset since the account was funded, run `python scripts/stellar_testnet_setup.py` first (it funds the account through Friendbot; also a network action that needs approval).
 
 ## 4. What the demo does not claim
 

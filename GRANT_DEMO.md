@@ -133,7 +133,7 @@ The demo dataset (`DEMO.md`) adds a genuine Stellar Testnet anchor.
 - **Every other state is shown as such, never as verified:** a local record alone, a pending record, an unreachable network, a tampered record, or changed evidence.
 - **Synthetic records cannot pass as verified:** they carry random transaction hashes, and the anchoring account is a random public key whose secret was never created, so no matching transaction can exist on the ledger.
 - **No write path reaches Stellar from a showcase:** read-only mode refuses anchoring before any route, and no signing key is configured. This stage submitted no transaction.
-- **Live check:** the demo dataset's genuine Testnet anchor is re-checked live in the browser tests (`--testnet-readonly`), independently on public Horizon (transaction, ledger, account and memo digest).
+- **Live check:** the browser tests had a live re-check of the demo dataset's genuine Testnet anchor (`--testnet-readonly`), independently on public Horizon (transaction, ledger, account and memo digest). Since Stage 10C-3B the browser tests run only on a disconnected computer, so that check is refused and does not run.
 
 ## 6. Dependency audit (2026-10-18)
 

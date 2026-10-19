@@ -14,6 +14,7 @@ import {
   refreshStellarAnchor,
   triggerExtraction,
   uploadDocument,
+  uploadVersion,
 } from '../api'
 import type {
   AIStatus,
@@ -22,6 +23,7 @@ import type {
   BlockchainStatus,
   Document,
   DocumentType,
+  DocumentVersion,
   LegalExtraction,
   StellarAnchor,
   TextLayerSummary,
@@ -54,6 +56,9 @@ export function passportLink(asset: Pick<Asset, 'blockchain_network' | 'stellar_
   return `/passport?${query.toString()}`
 }
 
+// The passport page, which then reads the passport's history by itself (institutional API key)
+export const passportHistoryLink = (asset: Parameters<typeof passportLink>[0]) => `${passportLink(asset)}&view=history`
+
 const DOC_TYPES: DocumentType[] = [
   'prospectus', 'legal_opinion', 'title_deed', 'regulatory_filing', 'audit_report', 'other',
 ]
@@ -74,6 +79,80 @@ function TextLayerNotice({ layer }: { layer: TextLayerSummary }) {
   return <p role="note" data-testid="text-layer-notice" className="mt-1 text-xs text-amber-700">{message}</p>
 }
 
+// A failed version upload; the server enforces document:upload and checks the PDF
+function versionUploadError(err: unknown): string {
+  if (!(err instanceof ApiError)) return 'Upload failed: the server could not be reached.'
+  if (err.status === 401) return 'Upload failed: your credential was not accepted. Check the user token in the sidebar.'
+  if (err.status === 403) return 'Upload failed: your role may not upload document versions.'
+  return `Upload failed: ${err.message}`
+}
+
+// What a new version means for the document's approvals. approvedBefore: whether the document had a
+// current approval before the upload; null if its extractions were not known
+function versionUploadedMessage(version: DocumentVersion, approvedBefore: boolean | null): string {
+  const n = version.version_number
+  const uploaded = `Version ${n} uploaded and is now the current version (SHA-256 ${version.sha256_hash.slice(0, 16)}…).`
+  const reapproval = `the Legal Passport does not use this document again until version ${n} has its own claims and is approved again.`
+  if (approvedBefore === false) {
+    return `${uploaded} No current approval of this document was affected; version ${n} needs its own claims and approval before the Legal Passport can use it.`
+  }
+  return approvedBefore
+    ? `${uploaded} The approvals of the earlier version are no longer current: ${reapproval}`
+    : `${uploaded} Any approval of an earlier version is no longer current: ${reapproval}`
+}
+
+function NewVersionForm({ doc, onUploaded, onCancel }: {
+  doc: Document
+  onUploaded: (version: DocumentVersion) => void
+  onCancel: () => void
+}) {
+  const [file, setFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState('')
+  const inputId = `new-version-file-${doc.id}`
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!file) return
+    setUploading(true)
+    setError('')
+    try {
+      onUploaded(await uploadVersion(doc.id, file))
+    } catch (err) {
+      setError(versionUploadError(err))
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit} data-testid="new-version-form" className="mt-3 space-y-3 rounded-lg bg-slate-50 p-4 ring-1 ring-slate-200">
+      <h4 className="text-sm font-semibold text-slate-900">Upload New Version of {doc.title}</h4>
+      <p className="text-xs text-slate-600">
+        The uploaded PDF becomes version {doc.current_version_number + 1}, the current version. Approvals of
+        version {doc.current_version_number} are not carried over: the new version needs its own claims and approval.
+      </p>
+      <div>
+        <label htmlFor={inputId} className="mb-1 block text-xs font-medium text-slate-700">PDF File</label>
+        <input
+          id={inputId}
+          type="file"
+          accept=".pdf,application/pdf"
+          onChange={e => setFile(e.target.files?.[0] ?? null)}
+          className="w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100"
+        />
+      </div>
+      {error && <p role="alert" data-testid="new-version-error" className="text-sm text-red-600">{error}</p>}
+      <div className="flex gap-3">
+        <button type="button" onClick={onCancel} className="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100">Cancel</button>
+        <button type="submit" disabled={uploading || !file} className="rounded-lg bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-60">
+          {uploading ? 'Uploading…' : 'Upload Version'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
 function DocumentsTab({ asset }: { asset: Asset }) {
   const [docs, setDocs] = useState<Document[]>([])
   const [loading, setLoading] = useState(true)
@@ -92,12 +171,16 @@ function DocumentsTab({ asset }: { asset: Asset }) {
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null)
   // The document whose manual claim form is open (Stage 10B-3)
   const [manualFor, setManualFor] = useState<string | null>(null)
+  // The document whose new-version form is open, and the outcome shown after an upload
+  const [versionFor, setVersionFor] = useState<string | null>(null)
+  const [versionNotices, setVersionNotices] = useState<Record<string, string>>({})
   const navigate = useNavigate()
   const { identity } = useAuth()
   // A read-only showcase refuses every write (Stage 10C-1); its actions are not offered
   const readOnly = useReadOnly()
   // Offered to roles that may create extraction records; the server enforces it
   const canCreateClaims = !readOnly && identity.state === 'signed_in' && identity.user.permissions.includes('extraction:run')
+  const canUploadVersion = !readOnly && identity.state === 'signed_in' && identity.user.permissions.includes('document:upload')
 
   useEffect(() => {
     getAiStatus().then(setAiStatus).catch(() => setAiStatus(null))
@@ -165,6 +248,15 @@ function DocumentsTab({ asset }: { asset: Asset }) {
     } finally {
       setExtracting(null)
     }
+  }
+
+  // The documents and their extractions are read again: the earlier version's extraction now shows as superseded
+  const handleVersionUploaded = (doc: Document, version: DocumentVersion) => {
+    const known = extractions[doc.id]
+    const approvedBefore = known === undefined ? null : known.some(ex => ex.approval_state?.state === 'current')
+    setVersionFor(null)
+    setVersionNotices(prev => ({ ...prev, [doc.id]: versionUploadedMessage(version, approvedBefore) }))
+    loadDocs()
   }
 
   // The current version's PDF, saved only if its bytes match the hash recorded for that version
@@ -314,6 +406,16 @@ function DocumentsTab({ asset }: { asset: Asset }) {
                     )}
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-2">
+                  {canUploadVersion && (
+                    <button
+                      data-testid="upload-new-version"
+                      onClick={() => setVersionFor(open => open === doc.id ? null : doc.id)}
+                      aria-expanded={versionFor === doc.id}
+                      className="rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                    >
+                      Upload New Version
+                    </button>
+                  )}
                   {version && canCreateClaims && (
                     <button
                       data-testid="add-manual-claim"
@@ -348,6 +450,21 @@ function DocumentsTab({ asset }: { asset: Asset }) {
                   </button>}
                   </div>
                 </div>
+
+                {versionNotices[doc.id] && (
+                  <div role="status" data-testid="version-upload-status"
+                       className="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900 ring-1 ring-amber-200">
+                    <p>{versionNotices[doc.id]}</p>
+                    <Link to={passportHistoryLink(asset)} className="mt-1 inline-block font-medium text-indigo-700 hover:text-indigo-900">
+                      View the Passport History →
+                    </Link>
+                  </div>
+                )}
+
+                {versionFor === doc.id && (
+                  <NewVersionForm doc={doc} onCancel={() => setVersionFor(null)}
+                                  onUploaded={uploaded => handleVersionUploaded(doc, uploaded)} />
+                )}
 
                 {manualFor === doc.id && version && (
                   <ManualClaimForm
@@ -611,6 +728,13 @@ function AnchorTab({ asset }: { asset: Asset }) {
               <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 px-6 py-3 text-xs">
                 <span className="font-medium text-slate-800">{ANCHOR_STATUS_LABELS[a.status]}</span>
                 <span className="font-mono text-slate-500">digest {shortHash(a.manifest_digest, 8)}</span>
+                {/* An anchor of earlier evidence (e.g. an earlier document version) never stands for the current one */}
+                <span data-testid="anchor-history-match"
+                      className={a.manifest_digest === verification.current_manifest_digest ? 'text-green-700' : 'text-amber-800'}>
+                  {a.manifest_digest === verification.current_manifest_digest
+                    ? 'Matches the current evidence'
+                    : 'Does not match the current evidence'}
+                </span>
                 {a.transaction_hash ? (
                   <a href={testnetExplorerTx(a.transaction_hash)} target="_blank" rel="noopener noreferrer"
                      className="font-mono text-indigo-600 hover:text-indigo-800">tx {shortHash(a.transaction_hash, 8)} ↗</a>
@@ -677,6 +801,13 @@ export function AssetDetail() {
             className="rounded-lg bg-indigo-50 px-3 py-1.5 text-sm font-medium text-indigo-700 hover:bg-indigo-100"
           >
             Open Legal Passport →
+          </Link>
+          <Link
+            data-testid="open-passport-history-link"
+            to={passportHistoryLink(asset)}
+            className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200"
+          >
+            View Passport History →
           </Link>
         </div>
 

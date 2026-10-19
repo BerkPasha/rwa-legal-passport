@@ -1,4 +1,4 @@
-import { test, expect, ctx, signIn, setCredentials, navLink, api, bearer } from '../support'
+import { test, expect, ctx, signIn, setCredentials, navLink, api, bearer, blockExternal } from '../support'
 
 // A. Authentication through the real sidebar Credentials panel; the backend decides what each identity may see.
 const assets = ctx.assets!
@@ -69,11 +69,12 @@ test.describe('A. Authentication', () => {
     await page.reload()
     await expect(page.getByTestId('auth-status')).toContainText('Signed in as')   // same tab: kept
     const other = await browser.newContext()                                      // another session: nothing
+    const external: string[] = []
+    await blockExternal(other, origin => external.push(origin))                   // the isolation of the test's own context
     const fresh = await other.newPage()
-    await fresh.route(url => url.origin !== new URL(page.url()).origin && !url.href.startsWith(process.env.E2E_API_URL ?? '#'),
-                      route => route.fulfill({ status: 204, body: '' }))
     await fresh.goto('/api-docs')
     await expect(fresh.getByTestId('auth-status')).toHaveText('Not signed in')
+    expect(external, 'external requests of the application (refused in the browser)').toEqual([])
     await other.close()
   })
 })

@@ -102,6 +102,7 @@ export function ApiDocs() {
       <Section title="Legal Passport (Institutional)">
         <EndpointTable endpoints={[
           { method: 'GET', path: '/passport/{network}/{asset_code}/{issuer_key}', auth: 'X-API-Key', description: 'Retrieve the legal transparency passport built from current approvals only (409 if approvals are stale or the asset is not active)' },
+          { method: 'GET', path: '/passport/{network}/{asset_code}/{issuer_key}/history', auth: 'X-API-Key', description: 'Document versions, every approval (current, stale or superseded, and why) with what it approved, and the anchoring records' },
         ]} />
       </Section>
 

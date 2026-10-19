@@ -14,6 +14,7 @@ import type {
   LegalExtraction,
   LegalPassport,
   ManualExtractionPayload,
+  PassportHistory,
   ReviewApproval,
   ReviewCorrection,
   ReviewStatus,
@@ -139,6 +140,14 @@ export const uploadDocument = (
 ): Promise<Document> =>
   request(`/assets/${assetId}/documents`, { method: 'POST', body: formData })
 
+// A new version of an existing document (multipart field "file"). It becomes the current version:
+// approvals of earlier versions stop being current, and nothing is carried over (Stage 9B-3).
+export const uploadVersion = (docId: string, file: File): Promise<DocumentVersion> => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request(`/documents/${encodeURIComponent(docId)}/versions`, { method: 'POST', body: formData })
+}
+
 export const getDocumentVersions = (docId: string): Promise<DocumentVersion[]> =>
   request(`/documents/${encodeURIComponent(docId)}/versions`)
 
@@ -247,6 +256,18 @@ export const getLegalPassport = (
   apiKey: string,
 ): Promise<LegalPassport> =>
   request(`/passport/${network}/${assetCode}/${issuerKey}`, {}, {
+    'X-API-Key': apiKey,
+  }, 'none')
+
+// Every document version, every approval (current, stale or superseded, and why) and the stored
+// anchoring records; answered also when no current passport exists (the passport then answers 409)
+export const getPassportHistory = (
+  network: string,
+  assetCode: string,
+  issuerKey: string,
+  apiKey: string,
+): Promise<PassportHistory> =>
+  request(`/passport/${network}/${assetCode}/${issuerKey}/history`, {}, {
     'X-API-Key': apiKey,
   }, 'none')
 
