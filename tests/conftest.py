@@ -13,7 +13,15 @@ For every test:
 The standard document (created_document) is a two-page text PDF containing every quotation of
 the mock AI, so approvals of its extractions pass the source-evidence gate (Stage 9B-4).
 minimal_pdf stays a blank, scanned-like PDF on which no quotation can ever be verified.
+
+No test reaches the network (Stage 10C-3B, T5-S; tests/network_guard.py): outbound DNS lookups
+and connections are refused in this process before anything else is imported, and a test that
+attempted one fails, even if the refusal was swallowed.
 """
+
+from tests import network_guard
+
+network_guard.install()
 
 import io
 from contextlib import asynccontextmanager
@@ -377,3 +385,35 @@ def inst_headers() -> dict:
 def inst_beta_headers() -> dict:
     """Institutional client API key header (Apex Legal Research, Harbor scope only)."""
     return {"X-API-Key": INST_KEY_BETA}
+
+
+# ── No outbound network (Stage 10C-3B, T5-S; tests/network_guard.py) ──────────
+
+
+@pytest.fixture(autouse=True)
+def no_outbound_network():
+    """
+    Fails a test during which (or before which) an outbound attempt was refused, or after which
+    a guard is no longer installed (code that undid it would otherwise go unnoticed).
+    """
+    earlier = network_guard.take_attempts()
+    assert not earlier, f"outbound network attempts refused before this test: {earlier}"
+    assert all(network_guard.installed().values()), f"network guard not installed: {network_guard.installed()}"
+    yield
+    refused = network_guard.take_attempts()
+    assert not refused, f"outbound network attempts refused during this test: {refused}"
+    assert all(network_guard.installed().values()), f"network guard removed during this test: {network_guard.installed()}"
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if network_guard.take_attempts():                   # after the last test, e.g. from a lingering task
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+def pytest_terminal_summary(terminalreporter):
+    deliberate = len(network_guard.deliberate)
+    terminalreporter.write_line(
+        f"outbound network guard: {network_guard.blocked_total} attempt(s) refused before reaching the network "
+        f"({deliberate} deliberate positive controls, {network_guard.blocked_total - deliberate} undeclared); "
+        f"guards installed: {all(network_guard.installed().values())}"
+    )

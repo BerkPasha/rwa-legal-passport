@@ -28,7 +28,7 @@ import asyncio
 import base64
 import json
 import weakref
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -146,10 +146,59 @@ class OnchainTransaction:
     operations: list[dict] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class VerificationLookup:
+    """
+    One live read of the network for a verification (Stage 10C-3B, T5). Never stored: `shared`
+    means it was read for a concurrent identical verification that was still waiting for Horizon
+    when this one asked, never that it was kept from an earlier request.
+    """
+    network_matches: bool
+    transaction: Optional[OnchainTransaction] = None    # None when the network does not match
+    shared: bool = False
+
+
+class MalformedHorizonResponse(AnchorNetworkError):
+    """Horizon answered, but not in the documented shape: nothing can be concluded."""
+
+    def __init__(self) -> None:
+        super().__init__("Horizon answered with a malformed response.")
+
+
+def _json_object(response: httpx.Response) -> dict:
+    try:
+        body = response.json()
+    except ValueError:
+        raise MalformedHorizonResponse() from None
+    if not isinstance(body, dict):
+        raise MalformedHorizonResponse()
+    return body
+
+
 def _parse_time(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _parse_transaction(tx: dict, transaction_hash: str) -> OnchainTransaction:
+    """A transaction record as Horizon documents it; anything else is malformed, never 'unsuccessful'."""
+    successful, ledger = tx.get("successful"), tx.get("ledger")
+    if (tx.get("hash") != transaction_hash or not isinstance(successful, bool)
+            or not (ledger is None or (isinstance(ledger, int) and not isinstance(ledger, bool)))):
+        raise MalformedHorizonResponse()
+    try:
+        closed_at = _parse_time(tx.get("created_at"))
+    except (TypeError, ValueError, AttributeError):
+        raise MalformedHorizonResponse() from None
+    memo = None
+    if tx.get("memo_type") == "hash" and tx.get("memo"):
+        try:
+            memo = base64.b64decode(tx["memo"], validate=True)
+        except (TypeError, ValueError):
+            memo = None
+    return OnchainTransaction(found=True, successful=successful, source_account=tx.get("source_account"),
+                              memo_type=tx.get("memo_type"), memo=memo, ledger=ledger, closed_at=closed_at)
 
 
 def _result_codes(body: dict) -> str:
@@ -161,6 +210,17 @@ def _result_codes(body: dict) -> str:
 
 # One lock per event loop serializes the account's sequence numbers within the process
 _LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = weakref.WeakKeyDictionary()
+
+# Verification lookups still waiting for Horizon, per event loop (Stage 10C-3B, T5): a concurrent
+# identical verification joins one instead of asking Horizon again. An entry exists only while its
+# lookup runs, so no result outlives it; beyond the bound, lookups simply run on their own.
+MAX_SHARED_LOOKUPS = 64
+_IN_FLIGHT: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict]" = weakref.WeakKeyDictionary()
+
+
+def in_flight_lookups() -> int:
+    """How many lookups this event loop is sharing right now (for tests and diagnostics)."""
+    return len(_IN_FLIGHT.get(asyncio.get_running_loop(), {}))
 
 
 class StellarAnchorService:
@@ -290,34 +350,79 @@ class StellarAnchorService:
             return SubmissionOutcome(AnchorStatus.failed, failure_reason=reason)
         return SubmissionOutcome(AnchorStatus.pending, failure_reason=f"submission_http_{response.status_code}")
 
+    async def _fetch_transaction(self, client: httpx.AsyncClient, transaction_hash: str) -> OnchainTransaction:
+        response = await self._get(client, f"/transactions/{transaction_hash}")
+        if response.status_code == 404:
+            return OnchainTransaction(found=False)
+        if response.status_code != 200:
+            raise AnchorNetworkError(f"Horizon HTTP error: {response.status_code}.")
+        tx = _parse_transaction(_json_object(response), transaction_hash)
+        if not tx.successful:
+            return tx      # every caller decides on an unsuccessful transaction without its operations
+        operations = await self._get(client, f"/transactions/{transaction_hash}/operations", limit=10)
+        if operations.status_code != 200:
+            raise AnchorNetworkError(f"Horizon HTTP error: {operations.status_code}.")
+        records = (_json_object(operations).get("_embedded") or {}).get("records")
+        if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
+            raise MalformedHorizonResponse()
+        tx.operations = records
+        return tx
+
     async def get_transaction(self, transaction_hash: str) -> OnchainTransaction:
         """The transaction as the network reports it (found=False if Horizon does not know it)."""
         async with self._client() as client:
-            response = await self._get(client, f"/transactions/{transaction_hash}")
-            if response.status_code == 404:
-                return OnchainTransaction(found=False)
-            if response.status_code != 200:
-                raise AnchorNetworkError(f"Horizon HTTP error: {response.status_code}.")
-            tx = response.json()
-            operations = await self._get(client, f"/transactions/{transaction_hash}/operations", limit=10)
-            if operations.status_code != 200:
-                raise AnchorNetworkError(f"Horizon HTTP error: {operations.status_code}.")
-        memo = None
-        if tx.get("memo_type") == "hash" and tx.get("memo"):
-            try:
-                memo = base64.b64decode(tx["memo"], validate=True)
-            except ValueError:
-                memo = None
-        return OnchainTransaction(
-            found=True,
-            successful=bool(tx.get("successful")),
-            source_account=tx.get("source_account"),
-            memo_type=tx.get("memo_type"),
-            memo=memo,
-            ledger=tx.get("ledger"),
-            closed_at=_parse_time(tx.get("created_at")),
-            operations=operations.json().get("_embedded", {}).get("records", []),
-        )
+            return await self._fetch_transaction(client, transaction_hash)
+
+    async def _verification_read(self, transaction_hash: str) -> VerificationLookup:
+        """The network check and the transaction, through one connection and within one deadline."""
+        async def read() -> VerificationLookup:
+            async with self._client() as client:
+                passphrase = _json_object(await self._expect_200(client, "/")).get("network_passphrase")
+                if not isinstance(passphrase, str):
+                    raise MalformedHorizonResponse()
+                if passphrase != TESTNET_PASSPHRASE:
+                    return VerificationLookup(network_matches=False)
+                return VerificationLookup(network_matches=True,
+                                          transaction=await self._fetch_transaction(client, transaction_hash))
+        try:
+            # One bound for all requests together (each also has the client's own timeout)
+            return await asyncio.wait_for(read(), self._timeout)
+        except TimeoutError:
+            raise AnchorNetworkError("Horizon did not answer in time.") from None
+
+    async def _expect_200(self, client: httpx.AsyncClient, path: str) -> httpx.Response:
+        response = await self._get(client, path)
+        if response.status_code != 200:
+            raise AnchorNetworkError(f"Horizon HTTP error: {response.status_code}.")
+        return response
+
+    async def verification_lookup(self, transaction_hash: str) -> VerificationLookup:
+        """
+        Reads the network for a verification: Horizon's network passphrase, the transaction and
+        its operations. Always a live read, never cached. A concurrent verification of the same
+        transaction on the same Horizon server, still waiting for Horizon, is joined instead of
+        repeated; its outcome, an error included, is that of the shared read.
+        """
+        loop = asyncio.get_running_loop()
+        lookups = _IN_FLIGHT.setdefault(loop, {})
+        key = (self.horizon_url, TESTNET_PASSPHRASE, self._transport, transaction_hash)
+        task = lookups.get(key)
+        if task is not None:
+            return replace(await asyncio.shield(task), shared=True)
+        if len(lookups) >= MAX_SHARED_LOOKUPS:
+            return await self._verification_read(transaction_hash)
+        # Its own task: a requester that disconnects never cancels the read the others wait for
+        task = asyncio.ensure_future(self._verification_read(transaction_hash))
+        lookups[key] = task
+
+        def finished(done: asyncio.Task) -> None:
+            if lookups.get(key) is done:
+                del lookups[key]
+            if not done.cancelled():
+                done.exception()        # retrieved here, so an unawaited failure is never reported twice
+
+        task.add_done_callback(finished)
+        return await asyncio.shield(task)
 
 
 def get_anchor_service() -> StellarAnchorService:

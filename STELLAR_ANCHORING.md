@@ -97,11 +97,43 @@ Verification is read-only:
 | `failed` | Failed, unsuccessful, or expired without inclusion |
 | `onchain_mismatch` | The network transaction does not match the record or the trusted account |
 | `transaction_unavailable` | A confirmed anchor the network no longer returns (e.g. after a Testnet reset) |
-| `network_unavailable` | Horizon unreachable, or on another network (`onchain.error`) |
+| `network_unavailable` | Horizon unreachable, too slow, answering with an unexpected status or a malformed response, or on another network (`onchain.error`) |
 | `anchoring_not_configured` | No trusted anchoring account is configured |
 | `anchor_record_invalid` | The stored record fails its own digest or asset check |
 
 Only `verified` sets `verified: true`. The response includes `committed_manifest_canonical_json`; its SHA-256 is the anchored digest, so a client can check the commitment independently on any Horizon server.
+
+### Horizon reads (Stage 10C-3B, T5)
+
+**No cache, by design.** The API and the interface promise a *live* check: the endpoint descriptions, the "Live network checks" of the interface and `checked_at`. A cached confirmation would be shown as one, and could survive a Testnet reset or an on-chain change. So every verification reads the network again. Only the following is shared or saved:
+- **One connection per verification.** The network passphrase (`GET /`), the transaction and its operations are read through one HTTP client. Before T5 there were two.
+- **No operations read for an unsuccessful transaction.** Its outcome (`failed`) never depends on them.
+- **Concurrent identical verifications share one read.** A verification of the same transaction, on the same Horizon server and network, that is still waiting for Horizon is joined instead of repeated.
+  - The read exists only while Horizon answers it: a finished read is never reused, and no request receives a result that was complete before it asked.
+  - Each request still recomputes its own manifest and runs its own record, account, memo, operation and digest checks. A request whose evidence changed meanwhile gets `evidence_changed`.
+  - The read runs as its own task: a requester that disconnects does not cancel it for the others. A failed read fails every request that joined it (`network_unavailable`), and nothing negative is kept.
+  - At most 64 reads are shared per process; beyond that, reads run on their own.
+  - Internally the result is marked `shared`. The response is unchanged.
+
+Measured with the fake Horizon:
+
+| Scenario | Requests before → after T5 | Connections before → after |
+|---|---|---|
+| 1 verification | 3 → 3 | 2 → 1 |
+| 10 sequential | 30 → 30 | 20 → 10 |
+| 10 concurrent | 30 → 3 when all overlap | 20 → 1 |
+| Unsuccessful transaction | 3 → 2 | 2 → 1 |
+
+**Bounded, and never a false confirmation.**
+- One verification read takes at most 30 seconds in total. Before T5, each of its three requests could take 30 seconds.
+- An unexpected HTTP status (429, 5xx), a refused connection, a timeout, or a malformed answer is `network_unavailable`, never `failed` or `verified`. A malformed answer is non-JSON, the wrong JSON shape, a non-boolean `successful`, another transaction's `hash`, a malformed `ledger` or time, or malformed operations.
+- A pending anchor whose refresh receives a malformed answer stays pending, so it is never declared failed and submitted again. Before T5, a missing `successful` field counted as an unsuccessful transaction.
+- Nothing is retried automatically.
+
+**Public Horizon dependency.**
+- Each verification costs two or three requests to `horizon-testnet.stellar.org`, which rate-limits per client address. A busy public page can therefore reach that limit; the answer is then `network_unavailable`, never a stale confirmation.
+- A Testnet reset makes every transaction disappear. The next verification reports `transaction_unavailable` at once.
+- Submission, signing, and the network check before signing are unchanged by T5.
 
 ## 6. Setup and demo
 
@@ -151,4 +183,7 @@ The table is additive:
 - **History source:** verification depends on Horizon's retained history. A third party can verify on any Horizon server or public explorer.
 - **Single process:** sequence numbers are serialized per process; several processes anchoring at once can see `tx_bad_seq`, and the failed attempt can then be retried.
 
-Tests: `tests/test_stellar_anchoring.py` (fake Horizon via `tests/fake_horizon.py`; real signing and XDR).
+- **Live dependency:** verification needs the public Horizon at every request (no cache, see §5). An outage or a rate limit makes it `network_unavailable` for its duration.
+- **A confirmed transaction is not legal validity.** It is not ownership or regulatory approval either; see the disclaimer of every verification response.
+
+Tests: `tests/test_stellar_anchoring.py` (fake Horizon via `tests/fake_horizon.py`; real signing and XDR); `tests/test_horizon_verification.py` (Horizon reads, T5).

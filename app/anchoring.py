@@ -328,14 +328,17 @@ async def _check_network(
 ) -> AnchorVerificationResult:
     onchain.checked = True
     try:
-        onchain.network_passphrase_matches = await service.network_matches()
-        if not onchain.network_passphrase_matches:
-            onchain.error = "network_passphrase_mismatch"
-            return AnchorVerificationResult.network_unavailable
-        tx = await service.get_transaction(anchor.transaction_hash)
+        # A live read on every verification (Stage 10C-3B, T5): never a cached result, at most one
+        # shared with a concurrent identical verification while Horizon is still answering it
+        lookup = await service.verification_lookup(anchor.transaction_hash)
     except AnchorNetworkError as exc:
         onchain.error = str(exc)
         return AnchorVerificationResult.network_unavailable
+    onchain.network_passphrase_matches = lookup.network_matches
+    if not lookup.network_matches:
+        onchain.error = "network_passphrase_mismatch"
+        return AnchorVerificationResult.network_unavailable
+    tx = lookup.transaction
     onchain.transaction_found = tx.found
     if not tx.found:
         if anchor.status == AnchorStatus.pending.value:

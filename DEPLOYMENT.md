@@ -192,8 +192,8 @@ It names settings and rules only, never a configured value: no origin (only its 
 - `development` and `test` are for this computer only. Nothing stops a public server from being started with them, and the checks cannot see the address uvicorn binds to.
 - Running uvicorn with `--lifespan off` skips these checks, together with the existing registry and schema checks.
 - File locations (`DATABASE_URL`, `ACCESS_CONTROL_FILE`, `STORAGE_PATH`), the AI provider, `SYNTHETIC_DATA_NOTICE` and `MAX_UPLOAD_SIZE_MB` are not judged.
+- Done since: SQLite hardening (T4, §9) and the Horizon reads of verification (T5, STELLAR_ANCHORING.md §5: no cache, by design).
 - Assigned to later tasks of Stage 10C-3B:
-  - a Horizon verification cache (T5) (SQLite hardening, T4: §9);
   - the frontend build's `VITE_API_URL` guard (T6); backup and restore (T7);
   - a Python lock file (T8); the pypdf and Starlette upgrades (T9, T10);
   - token expiry and rotation (T11); a rehearsal on a real host (T12).
