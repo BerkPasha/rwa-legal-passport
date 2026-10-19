@@ -193,7 +193,42 @@ It names settings and rules only, never a configured value: no origin (only its 
 - Running uvicorn with `--lifespan off` skips these checks, together with the existing registry and schema checks.
 - File locations (`DATABASE_URL`, `ACCESS_CONTROL_FILE`, `STORAGE_PATH`), the AI provider, `SYNTHETIC_DATA_NOTICE` and `MAX_UPLOAD_SIZE_MB` are not judged.
 - Assigned to later tasks of Stage 10C-3B:
-  - SQLite hardening (T4); a Horizon verification cache (T5);
+  - a Horizon verification cache (T5) (SQLite hardening, T4: §9);
   - the frontend build's `VITE_API_URL` guard (T6); backup and restore (T7);
   - a Python lock file (T8); the pypdf and Starlette upgrades (T9, T10);
   - token expiry and rotation (T11); a rehearsal on a real host (T12).
+
+## 9. Database: SQLite integrity and contention (Stage 10C-3B, T4)
+
+The application uses one SQLite file through SQLAlchemy (`app/db/session.py`). Every request opens its own connection, because file databases use no connection pool.
+
+**Foreign keys.** SQLite enforces the 12 declared foreign keys only on connections that ask for it. Before T4 none did, so a row could reference a document, version or extraction that does not exist.
+- Every connection now sets `PRAGMA foreign_keys=ON`. Startup refuses a connection on which it is not active.
+- Rows that already exist are not re-checked, repaired or deleted. The local development and demo databases were checked on copies: no violations.
+- To check another database read-only before upgrading: `sqlite3 "file:<path>?mode=ro" "PRAGMA foreign_key_check"`. An empty result means no violations.
+- Enforcement exposed one ordering defect, now fixed: an upload wrote page rows before their version row. The models declare no `relationship()`, so each level is now written before the next.
+
+**Busy timeout.** `SQLITE_BUSY_TIMEOUT_SECONDS` (default 5, the sqlite3 module's own default) sets how long a connection waits for another connection's lock before failing.
+
+**WAL (opt-in).** `SQLITE_JOURNAL_MODE=wal` switches a writable database file to write-ahead logging at its first connection.
+- Readers then no longer wait for a writer.
+- There is still **one writer at a time**: a second writer waits up to the busy timeout and then receives 503.
+- The mode is stored in the file. It stays after the setting is removed; `PRAGMA journal_mode=DELETE` turns it back.
+- WAL is never applied in memory, to a read-only URI, or with `READ_ONLY_MODE` (a read-only showcase writes nothing, and its files may be read-only).
+- It needs `-wal` and `-shm` files next to the database, on a local file system, and must not be switched while another process holds the database open. If WAL was requested but did not take effect, startup refuses.
+- The default `unchanged` never touches the journal mode. The development database keeps its rollback journal.
+
+**Transactions and errors.**
+- A request's transaction is rolled back when the request fails. Its session is closed by `get_db`, and the write routes also roll back explicitly.
+- A lock held past the busy timeout, or an unusable database, is answered with **503**: `{"detail": "The database is busy or unavailable; please retry."}`, or the route's existing 503 message. The server log records `database.unavailable route=<route template> reason=locked|unavailable`. No statement, parameter, path or stack trace is returned or logged.
+- Nothing is retried automatically.
+- When a write is refused, nothing is stored: no row, no orphaned PDF, and no Stellar transaction. An anchor's record is committed before its transaction is submitted.
+- Constraint violations keep their answers: 409 for a duplicate asset or version, 500 for an unexpected one. Validation (422) and authentication or authorization answers (401, 403, 404) are unchanged; they are decided before the database is used.
+
+**Startup log.** `database.sqlite foreign_keys=on journal_mode=<mode> busy_timeout_ms=<ms> wal_setting=<setting>`.
+
+**Limits:**
+- SQLite has a single writer per database file. It suits one server process (as configured, `--workers 1`) and modest write rates, not unlimited scale.
+- A 503 caused by a read *after* a successful commit (unlikely: only another connection's commit can hold every lock) can hide a stored change. Re-read before repeating a creating request.
+- Running uvicorn with `--lifespan off` skips the startup checks.
+- Backups and restores (T7) and migrations remain manual: schema changes go through the existing migration scripts, and the startup schema check refuses an out-of-date database.

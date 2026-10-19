@@ -40,6 +40,7 @@ from app.approval_integrity import (
 from app.enums import ApprovalStaleReason
 from app.models.document import Document, DocumentVersion
 from app.models.review import ReviewApproval
+from tests.conftest import foreign_keys_unenforced
 from tests.test_approval_evidence_gate import _approve, _passport_url, _upload
 from tests.test_evidence_binding import _bind_format_1, _exec, _history
 from tests.test_passport_verification import _approved, _passport
@@ -114,10 +115,11 @@ async def test_an_approval_bound_to_another_document_is_never_current(
     other = (await _upload(client, created_asset["id"], source_pdf, issuer_headers, title="Unrelated"))["id"]
     forged = other if target == "other_document" else "missing-document"
     legal = await _approval_of(client, created_extraction["id"], legal_headers, "legal_verification")
-    if recompute:
-        await _rebind(async_db, legal["id"], document_id=forged)
-    else:
-        await _exec(async_db, "UPDATE review_approvals SET document_id = :d WHERE id = :a", d=forged, a=legal["id"])
+    async with foreign_keys_unenforced(async_db):           # "missing-document" exists nowhere
+        if recompute:
+            await _rebind(async_db, legal["id"], document_id=forged)
+        else:
+            await _exec(async_db, "UPDATE review_approvals SET document_id = :d WHERE id = :a", d=forged, a=legal["id"])
 
     legal = await _approval_of(client, created_extraction["id"], legal_headers, "legal_verification")
     assert legal["currency"] == {"is_current": False, "reasons": ["binding_integrity_failed"]}

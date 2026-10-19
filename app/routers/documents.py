@@ -272,7 +272,16 @@ async def _store_version(
         file_size=len(upload.content),
         sha256_hash=upload.sha256,
     )
-    db.add(version)
+    try:
+        # Parents before children (Stage 10C-3B, T4): the models declare no relationship(), so
+        # the unit of work does not order these inserts by their foreign keys, which SQLite now
+        # enforces. A new document, then its version, are written before the pages.
+        await db.flush()
+        db.add(version)
+        await db.flush()
+    except BaseException:
+        storage.discard(stored_path)        # the caller never received the version to clean up
+        raise
     for page in upload.pages:
         db.add(
             DocumentPage(

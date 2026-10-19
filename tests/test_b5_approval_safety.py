@@ -41,7 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.approval_integrity import bind_approval, load_extraction_context, summarize_extraction
 from app.enums import LegalFieldName
 from app.models.review import ReviewApproval
-from tests.conftest import _HARBOR_ASSET, _MERIDIAN_ASSET
+from tests.conftest import _HARBOR_ASSET, _MERIDIAN_ASSET, foreign_keys_unenforced
 from tests.pdf_fixtures import make_source_pdf
 from tests.test_approval_evidence_gate import (
     FEE_SIMPLE_QUOTE,
@@ -365,8 +365,8 @@ async def test_an_approval_failing_its_integrity_check_neither_competes_nor_coun
     issuer_headers: dict, legal_headers: dict, inst_headers: dict, async_db: AsyncSession,
 ):
     await _approve(client, created_extraction["id"], legal_headers)
-    await async_db.execute(text("UPDATE review_approvals SET document_id = 'another-document'"))
-    await async_db.commit()
+    async with foreign_keys_unenforced(async_db):           # 'another-document' exists nowhere
+        await async_db.execute(text("UPDATE review_approvals SET document_id = 'another-document'"))
     y = await _extract(client, created_document["id"], issuer_headers)
     assert (await _approve(client, y["id"], issuer_headers)).status_code == 201
     body = await _passport(client, created_asset, inst_headers)

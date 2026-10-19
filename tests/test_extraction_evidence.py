@@ -32,7 +32,7 @@ from app.models.document import DocumentPage
 from app.models.extraction import LegalClaim, LegalExtraction
 from app.schemas.extraction import AIExtractionResult, ClaimSource, RawClaim
 from app.services.ai import UNVERIFIED_DISCLAIMER, get_ai_service
-from tests.conftest import _HARBOR_ASSET
+from tests.conftest import _HARBOR_ASSET, foreign_keys_unenforced
 from tests.pdf_fixtures import make_text_pdf
 
 F = LegalFieldName
@@ -372,10 +372,10 @@ async def test_nonexistent_extraction_version_fails_closed(
 ):
     doc = await _upload(client, created_asset["id"], TWO_PAGE_PDF, issuer_headers)
     ex = await _extract(client, doc["id"], issuer_headers, known(F.jurisdiction, 1, QUOTE_1))
-    await async_db.execute(
-        update(LegalExtraction).where(LegalExtraction.id == ex["id"]).values(version_id=str(uuid.uuid4()))
-    )
-    await async_db.commit()
+    async with foreign_keys_unenforced(async_db):           # a version that exists nowhere
+        await async_db.execute(
+            update(LegalExtraction).where(LegalExtraction.id == ex["id"]).values(version_id=str(uuid.uuid4()))
+        )
 
     evidence = _evidence(await _get(client, ex["id"], issuer_headers), F.jurisdiction)
     assert evidence["status"] == "source_text_unavailable"

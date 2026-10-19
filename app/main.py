@@ -1,14 +1,16 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 
 from app.access_registry import describe_registry, load_access_registry, security_logger
 from app.config import settings
 from app.db.base import Base
 from app.db.schema_check import verify_schema_columns
-from app.db.session import engine
+from app.db.session import check_sqlite_state, engine, sqlite_connection_state, sqlite_wal_applies
 from app.deployment_checks import DEPLOYMENT_PROFILES, UnsafeDeploymentConfiguration, ensure_safe_configuration
 from app.middleware import (
     ApiDocsGateMiddleware,
@@ -136,6 +138,16 @@ async def lifespan(app: FastAPI):
     # refused before anything is created in it), then create the tables that are missing (e.g.
     # the empty stellar_anchors table on an up-to-date database)
     async with engine.begin() as conn:
+        # Before that, the connection itself (Stage 10C-3B, T4; app/db/session.py): foreign keys
+        # enforced, and WAL if requested and applicable
+        sqlite_state = await conn.run_sync(sqlite_connection_state)
+        if sqlite_state is not None:
+            check_sqlite_state(sqlite_state, wal_expected=sqlite_wal_applies(
+                engine.url, settings.sqlite_journal_mode, settings.read_only_mode))
+            security_logger.info(
+                "database.sqlite foreign_keys=on journal_mode=%s busy_timeout_ms=%d wal_setting=%s",
+                sqlite_state["journal_mode"], sqlite_state["busy_timeout_ms"], settings.sqlite_journal_mode,
+            )
         await conn.run_sync(verify_schema_columns)
         await conn.run_sync(Base.metadata.create_all)
     yield
@@ -178,6 +190,20 @@ app.add_middleware(
     max_age=600,
 )
 app.add_middleware(SecurityHeadersMiddleware)
+
+@app.exception_handler(OperationalError)
+async def database_unavailable(request: Request, exc: OperationalError) -> JSONResponse:
+    """
+    A lock held longer than the busy timeout, or a database that cannot be used, on a route that
+    does not answer it itself (Stage 10C-3B, T4): 503, never the statement, its parameters or a
+    path. The request's session is closed by get_db, which rolls its transaction back. Constraint
+    violations (IntegrityError) and programming errors are not handled here.
+    """
+    route = request.scope.get("route")
+    reason = "locked" if "locked" in str(getattr(exc, "orig", "")).lower() else "unavailable"
+    security_logger.warning("database.unavailable route=%s reason=%s", getattr(route, "path", "-"), reason)
+    return JSONResponse(status_code=503, content={"detail": "The database is busy or unavailable; please retry."})
+
 
 app.include_router(health.router)
 app.include_router(auth.router)

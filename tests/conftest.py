@@ -16,15 +16,17 @@ minimal_pdf stays a blank, scanned-like PDF on which no quotation can ever be ve
 """
 
 import io
+from contextlib import asynccontextmanager
 
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.access_registry import AccessRegistry, get_access_registry, hash_token
 from app.db.base import Base
-from app.db.session import get_db
+from app.db.session import create_database_engine, get_db
 from app.main import app
 from app.rate_limit import InMemoryRateLimiter, get_extraction_rate_limiter, get_rate_limiter
 from app.services.ai import get_ai_service
@@ -143,8 +145,11 @@ def bearer(token: str) -> dict:
 
 @pytest.fixture
 async def async_db() -> AsyncSession:
-    """Returns a fresh in-memory SQLite DB and session for every test."""
-    engine = create_async_engine(_TEST_DB_URL, echo=False)
+    """
+    Returns a fresh in-memory SQLite DB and session for every test, made like the application's
+    engine: foreign keys are enforced (Stage 10C-3B, T4).
+    """
+    engine = create_database_engine(_TEST_DB_URL, busy_timeout_seconds=5.0)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -153,6 +158,26 @@ async def async_db() -> AsyncSession:
         yield session
 
     await engine.dispose()
+
+
+@asynccontextmanager
+async def foreign_keys_unenforced(db: AsyncSession):
+    """
+    Plants a corrupt reference the way a database written before foreign keys were enforced
+    (Stage 10C-3B, T4), or by another tool, can still contain one: for the tests proving that the
+    application fails closed on such a record. Enforcement is off only inside the block, on the
+    test's own connection, and is always restored.
+    """
+    await db.commit()                                   # PRAGMA foreign_keys is ignored in a transaction
+    await db.execute(text("PRAGMA foreign_keys=OFF"))
+    assert (await db.execute(text("PRAGMA foreign_keys"))).scalar() == 0
+    try:
+        yield
+        await db.commit()
+    finally:
+        await db.rollback()
+        await db.execute(text("PRAGMA foreign_keys=ON"))
+        assert (await db.execute(text("PRAGMA foreign_keys"))).scalar() == 1
 
 
 @pytest.fixture

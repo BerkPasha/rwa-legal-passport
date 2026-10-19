@@ -31,10 +31,10 @@ from pathlib import Path
 import httpx
 import pytest
 from pydantic import ValidationError
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from app import main
 from app.config import Settings, settings
+from app.db.session import create_database_engine
 from app.deployment_checks import (
     AUTH_FAILURE_LIMIT_RANGE,
     CLIENT_RATE_LIMIT_RANGE,
@@ -280,7 +280,10 @@ def _lifespan_resources(tmp_path: Path, **values):
     subject = configured(**values, access_control_file=str(registry), storage_path=str(storage),
                          database_url=f"sqlite+aiosqlite:///{database.as_posix()}",
                          stellar_anchor_secret_file=str(tmp_path / "none.json"), ai_provider="disabled")
-    return subject, create_async_engine(subject.database_url), registry, database
+    # Made like the application's engine (app/db/session.py): its startup refuses one without foreign keys
+    engine = create_database_engine(subject.database_url, busy_timeout_seconds=subject.sqlite_busy_timeout_seconds,
+                                    journal_mode=subject.sqlite_journal_mode, read_only=subject.read_only_mode)
+    return subject, engine, registry, database
 
 
 @pytest.mark.parametrize("values, profile", [

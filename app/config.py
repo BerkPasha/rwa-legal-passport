@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     app_env: str = "development"
     database_url: str = "sqlite+aiosqlite:///./rwa_legal_passport.db"
+    # ── SQLite (Stage 10C-3B, T4; DEPLOYMENT.md §9) ───────────────────────────
+    # Seconds a connection waits for another connection's lock before the request fails with 503
+    # (5 is the sqlite3 module's own default)
+    sqlite_busy_timeout_seconds: float = Field(default=5.0, ge=0, le=60)
+    # "unchanged" (default): the database keeps its journal mode (a new file uses the rollback
+    # journal). "wal": write-ahead logging for a writable file database; stored in the file, it stays
+    # after this setting is removed. Never applied in memory or with READ_ONLY_MODE.
+    sqlite_journal_mode: Literal["unchanged", "wal"] = "unchanged"
     max_upload_size_mb: int = Field(default=10, ge=0, le=200)
     storage_path: str = "./storage"
     # Resource limits for parsing untrusted PDFs (Stage 9B-2)

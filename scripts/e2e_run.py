@@ -74,7 +74,7 @@ DEMO_DATASET = ROOT / "scratch" / "stellar-demo" / "demo"
 REPORTS = ROOT / "scratch" / "e2e"
 RESERVED_PORTS = {8000, 5173}           # the development servers' default ports
 # Every variable the application reads (app/config.py), and proxies: none is inherited by the servers
-APP_VARIABLES = ("APP_", "DATABASE_URL", "MAX_UPLOAD", "STORAGE_PATH", "MAX_PDF", "PDF_PARSE", "AI_",
+APP_VARIABLES = ("APP_", "DATABASE_URL", "SQLITE_", "MAX_UPLOAD", "STORAGE_PATH", "MAX_PDF", "PDF_PARSE", "AI_",
                  "ANTHROPIC", "ACCESS_CONTROL", "CORS_", "EXTRACTION_RATE", "STELLAR_", "REVIEWER_",
                  "INSTITUTIONAL_", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "READ_ONLY_MODE",
                  "API_DOCS_ENABLED", "SYNTHETIC_DATA_NOTICE")
