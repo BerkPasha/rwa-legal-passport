@@ -28,7 +28,7 @@ async function state(request: APIRequestContext) {
 test.describe('Read-only showcase', () => {
   test('every page says what this server is, and an anonymous visitor sees no data', async ({ page, request, diagnostics }) => {
     diagnostics.allow(/status of 403/)
-    await page.goto('/')
+    await page.goto('/dashboard')
     const banner = page.getByTestId('deployment-banner')
     await expect(banner).toContainText('Read-only showcase: nothing can be created or changed on this server.')
     await expect(banner).toContainText('synthetic and fictional')

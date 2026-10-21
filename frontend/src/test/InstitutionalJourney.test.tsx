@@ -43,7 +43,7 @@ describe('Unknown addresses and page titles', () => {
     renderApp('/no-such-page')
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument()
     expect(screen.getByText('/no-such-page')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Go to the dashboard' })).toHaveAttribute('href', '/')
+    expect(screen.getByRole('link', { name: 'Go to the dashboard' })).toHaveAttribute('href', '/dashboard')
     expect(screen.getByRole('link', { name: 'Open the asset registry' })).toHaveAttribute('href', '/assets')
     expect(screen.getByRole('heading', { level: 1, name: 'Page Not Found' })).toBeInTheDocument()
     expect(screen.getByRole('navigation')).toBeInTheDocument()
@@ -51,7 +51,7 @@ describe('Unknown addresses and page titles', () => {
   })
 
   it('every page has the title of what it shows', () => {
-    expect(pageTitle('/')).toBe('Dashboard')
+    expect(pageTitle('/dashboard')).toBe('Dashboard')
     expect(pageTitle('/assets')).toBe('Asset Registry')
     expect(pageTitle('/assets/')).toBe('Asset Registry')
     expect(pageTitle('/assets/a1')).toBe('Asset Detail')
@@ -88,7 +88,7 @@ describe('Authorization state', () => {
     server.use(http.get(`${BASE}/assets`, ({ request }) => request.headers.get('Authorization')
       ? HttpResponse.json([MOCK_ASSET])
       : HttpResponse.json({ detail: 'Not authenticated' }, { status: 403 })))
-    renderApp('/')
+    renderApp('/dashboard')
     expect(await screen.findByRole('alert')).toHaveTextContent('Not authenticated')
     await userEvent.click(screen.getByRole('button', { name: /^Credentials/ }))
     await userEvent.type(screen.getByLabelText('User Token (Bearer)'), 'fictional-token')

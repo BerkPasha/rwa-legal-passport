@@ -103,7 +103,7 @@ describe('An ordinary server', () => {
 
 describe('How to read this application', () => {
   it('explains each concept without equating a quotation match with legal validity', async () => {
-    renderApp('/', false)
+    renderApp('/dashboard', false)
     const section = await screen.findByTestId('how-to-read')
     for (const title of ['The problem', 'A Legal Passport', 'Page-grounded verification', 'Human review',
                          'Stellar Testnet anchoring', 'Experimental']) {

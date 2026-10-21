@@ -6,7 +6,7 @@ const assets = ctx.assets!
 test.describe('A. Authentication', () => {
   test('signing in on the dashboard reloads it in place and shows whom the credential belongs to', async ({ page, request, diagnostics }) => {
     diagnostics.allow(/status of 403/)   // the dashboard's first request, before any credential is set
-    await page.goto('/')
+    await page.goto('/dashboard')
     await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible()
     await expect(page.getByRole('alert')).toHaveText('Not authenticated')
     await expect(page.getByTestId('auth-status')).toHaveText('Not signed in')

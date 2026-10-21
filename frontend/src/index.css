@@ -6,6 +6,13 @@
   body {
     @apply text-slate-900 antialiased;
   }
+
+  /* In-page links of the public website scroll smoothly, unless the visitor asks for less motion */
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
 }
 
 @layer utilities {

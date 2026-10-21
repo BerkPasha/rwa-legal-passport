@@ -39,6 +39,24 @@ test.describe('Deployment rehearsal', () => {
     expect((await request.post(`${base}/assets/${manual.id}`)).status()).toBe(405)
   })
 
+  test('the public website loads under the same CSP, sends nothing elsewhere and leads into the application', async ({ page, diagnostics }) => {
+    diagnostics.allow(/status of 403/)   // the dashboard, opened without a credential
+    const requests: string[] = []
+    page.on('request', r => requests.push(r.url()))
+    await page.goto('/')
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('The legal evidence layer for real-world assets.')
+    await expect(page.getByTestId('deployment-banner')).toContainText('Read-only showcase')
+    const primary = page.getByRole('navigation', { name: 'Primary' })
+    await primary.getByRole('link', { name: 'Platform' }).click()
+    await expect(page).toHaveURL(/#platform$/)
+    await expect(page.getByTestId('passport-history')).toBeAttached()          // the product preview
+    await primary.getByRole('link', { name: 'Launch App' }).click()
+    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible()
+    expect(diagnostics.externalRequests).toEqual([])
+    expect(requests.every(url => new URL(url).origin === origin)).toBe(true)
+  })
+
   test('the browser uses the API on its own origin, sends nothing elsewhere, and violates no CSP', async ({ page, diagnostics }) => {
     diagnostics.allow(/status of 403/)   // the deep link, opened before signing in
     const requests: string[] = []
