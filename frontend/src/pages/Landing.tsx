@@ -127,7 +127,6 @@ const HERO_OUTCOMES = [
   ['Changes in plain sight', 'Every new document version, and the approvals it affects.'],
 ]
 
-const STEP_NAMES = ['Register asset', 'Attach evidence', 'Review and approve', 'Verify integrity']
 const AUDIENCE_NAMES = ['Tokenization platforms', 'Asset issuers', 'Custodians', 'Institutional investors']
 
 function Hero() {
@@ -164,20 +163,20 @@ function Hero() {
             </ul>
           </div>
 
-          <figure className="hidden sm:block lg:col-span-7">
-            <div className={`flex items-center justify-between border border-b-0 border-white/10 px-5 py-3 ${LABEL} text-ink-muted`}>
+          <figure className="lg:col-span-7">
+            <div className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border border-b-0 border-white/10 px-5 py-3 ${LABEL} text-ink-muted`}>
               <span>One asset · one record</span>
               <span>Demo record · Stellar Testnet</span>
             </div>
             <div className="border border-white/10 bg-ink-raised/60 p-3 sm:p-5">
               <EvidenceGraph />
             </div>
-            <figcaption className="mt-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
-              <ol className={`flex flex-wrap gap-x-5 gap-y-2 ${LABEL} text-ink-muted`}>
-                {STEP_NAMES.map((name, i) => (
-                  <li key={name}><span className="text-accent-light">{pad(i + 1)}</span> {name}</li>
-                ))}
-              </ol>
+            <figcaption className="mt-4 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+              <p className="max-w-[480px] font-body text-[13px] leading-relaxed text-ink-muted text-pretty">
+                The Stellar Testnet anchor shows that this exact evidence digest was recorded at a ledger time and
+                is unchanged since. It does not show that the documents or claims are legally valid; approvals are
+                internal attestations, not legal opinions.
+              </p>
               <a href="#how-it-works" className={`group inline-flex items-center gap-2 font-body text-[13px] text-ink-soft hover:text-mist ${FOCUS}`}>
                 How each step works <Arrow />
               </a>

@@ -1,153 +1,321 @@
-import type { ReactNode } from 'react'
-import { DEMO_DIGEST_V2, DEMO_LEDGER_V2, DEMO_SHA256_V1, DEMO_SHA256_V2, DEMO_TX_V1, DEMO_TX_V2 } from './demoRecord'
+import { DEMO_DIGEST_V2, DEMO_HISTORY, DEMO_SHA256_V1, DEMO_SHA256_V2, DEMO_TX_V1, DEMO_TX_V2 } from './demoRecord'
 
-// The hero composition of the website: how one asset's legal evidence is recorded, step by step (the step
-// numbers are those of "How it works"), from the asset to its Stellar Testnet commitment. The values are
-// the public demo record's (demoRecord.ts).
-const short = (hash: string, head = 8, tail = 8) => `${hash.slice(0, head)}…${hash.slice(-tail)}`
+// The hero figure of the website: the evidence record of one asset, as a stage framework (diagram-design,
+// Process type): five stages from the asset to its cryptographic verification, each with the same two slots,
+// what is CURRENT (served in the passport) and what version 2 SUPERSEDED (kept as history). Teal marks the
+// current evidence chain and its one focal stage, the Stellar Testnet verification. Two layouts of the same
+// record: a stage × slot matrix (sm and up) and a single column for phones. Values from the public demo record
+// (demoRecord.ts); static, with no motion.
+const short = (hash: string, n = 8) => `${hash.slice(0, n)}…${hash.slice(-n)}`
 
-const LINE = '#2A3543'
-const TEAL = '#168A82'
-const TEAL_TEXT = '#4FC1B7'
-const TEXT = '#E8EAEC'
-const MUTED = '#8B97A5'
-const DIM = '#5E6A78'
+const C = {
+  paper: '#0D141D',       // the figure's own ground (bg-ink-raised/60 on bg-ink): label masks
+  card: '#0F1620',        // ink.raised
+  line: '#2E3A4A',
+  dash: '#3A4756',
+  text: '#E8EAEC',
+  soft: '#A9B3BE',        // ink.soft
+  muted: '#8B97A5',       // ink.muted
+  past: '#7A8695',        // superseded text: dimmer than muted, still 5:1 on the ground
+  accent: '#168A82',
+  accentText: '#4FC1B7',  // accent.light
+  accentTint: 'rgba(22,138,130,0.10)',
+}
 
-function Card({ x, y, w, h, step, title, aside, delay, children }: {
-  x: number; y: number; w: number; h: number; step?: string; title: string; aside?: string; delay: number; children: ReactNode
+type Line =
+  | { kind: 'name'; text: string; aside?: string }
+  | { kind: 'mono' | 'value' | 'quote'; text: string }
+
+interface Current { eyebrow: string; chip: string; lines: [Line, Line] }
+interface Past { chip: string; name: string; value: string }
+interface Stage { name: [string, string?]; current: Current; past?: Past; handoff?: string }
+
+const asset = DEMO_HISTORY.asset
+
+const STAGES: Stage[] = [
+  {
+    name: ['Asset'],
+    current: {
+      eyebrow: 'TOKENIZED ASSET · REAL ESTATE', chip: 'ACTIVE',
+      lines: [
+        { kind: 'name', text: asset.asset_code, aside: asset.issuer_organization },
+        { kind: 'mono', text: `STELLAR TESTNET · ISSUER ${asset.issuer_key.slice(0, 6)}…${asset.issuer_key.slice(-4)}` },
+      ],
+    },
+    handoff: 'DOCUMENTED BY',
+  },
+  {
+    name: ['Legal', 'documents'],
+    current: {
+      eyebrow: 'PROSPECTUS', chip: 'CURRENT',
+      lines: [{ kind: 'name', text: 'Version 2 · 4 pages' }, { kind: 'mono', text: `SHA-256 ${short(DEMO_SHA256_V2)}` }],
+    },
+    past: { chip: 'SUPERSEDED', name: 'Prospectus v1', value: `SHA-256 ${short(DEMO_SHA256_V1, 6)}` },
+    handoff: 'QUOTED AT P.2',
+  },
+  {
+    name: ['Legal claims', '& evidence'],
+    current: {
+      eyebrow: 'INCOME RIGHTS · PAGE 2', chip: 'CURRENT',
+      lines: [{ kind: 'quote', text: '“Net rental income shall be' }, { kind: 'quote', text: 'distributed quarterly”' }],
+    },
+    past: { chip: 'SUPERSEDED', name: 'Claims of v1', value: 'NOT IN THE PASSPORT' },
+    handoff: 'APPROVED BY',
+  },
+  {
+    name: ['Human', 'approvals'],
+    current: {
+      eyebrow: 'BOUND TO VERSION 2', chip: 'CURRENT',
+      lines: [{ kind: 'name', text: 'Issuer attestation' }, { kind: 'name', text: 'Independent legal review' }],
+    },
+    past: { chip: 'INVALIDATED', name: 'Approvals of v1', value: 'VERSION SUPERSEDED' },
+    handoff: 'HASHED INTO',
+  },
+  {
+    name: ['Cryptographic', 'verification'],
+    current: {
+      eyebrow: 'STELLAR TESTNET ANCHOR', chip: 'VERIFIED ON HORIZON',
+      lines: [
+        { kind: 'value', text: `Manifest SHA-256 ${short(DEMO_DIGEST_V2)}` },
+        { kind: 'mono', text: `= MEMO HASH OF TX ${short(DEMO_TX_V2)}` },
+      ],
+    },
+    past: { chip: 'NOT CURRENT', name: 'Anchor of v1', value: `TX ${short(DEMO_TX_V1, 6)}` },
+  },
+]
+const FOCAL = STAGES.length - 1
+
+const TITLE = `Evidence record of one tokenized asset (${asset.asset_code})`
+const DESC =
+  `Synthetic demo record of ${asset.asset_code} in five stages: version 2 of the prospectus is current and ` +
+  'version 1 superseded; an Income Rights claim quotes page 2 of version 2; an issuer attestation and an ' +
+  'independent legal review are bound to version 2, while the version 1 approvals are invalidated; and the ' +
+  'evidence manifest digest is the memo hash of a Stellar Testnet transaction verified on Horizon, while the ' +
+  'version 1 anchor no longer matches the current evidence.'
+
+// Mono labels: 8.5px, tracked 0.1em. Chip widths come from the same per-character budget (0.62em + tracking).
+const CHIP_FONT = 8.5
+const chipWidth = (text: string) => Math.ceil((text.length * CHIP_FONT * 0.72 + 14) / 4) * 4
+
+function Chip({ x, y, text, tone, align = 'start' }: {
+  x: number; y: number; text: string; tone: 'current' | 'past' | 'focal'; align?: 'start' | 'end'
 }) {
+  const w = chipWidth(text)
+  const left = align === 'end' ? x - w : x
+  const stroke = tone === 'focal' ? C.accent : tone === 'past' ? C.dash : 'rgba(232,234,236,0.45)'
+  const fill = tone === 'focal' ? C.accentText : tone === 'past' ? C.past : C.text
   return (
-    <g className="motion-safe:animate-rise" style={{ animationDelay: `${delay}ms` }}>
-      <rect x={x} y={y} width={w} height={h} rx={2} fill="#0F1620" stroke="#263140" />
-      {step && <text x={x + 16} y={y + 24} className="font-label" fontSize={9.5} letterSpacing="0.14em" fill={TEAL_TEXT}>{step}</text>}
-      <text x={x + (step ? 42 : 16)} y={y + 24} className="font-label" fontSize={9.5} letterSpacing="0.14em" fill={MUTED}>{title}</text>
-      {aside && (
-        <text x={x + w - 16} y={y + 24} textAnchor="end" className="font-label" fontSize={9.5} letterSpacing="0.14em"
-              fill={TEAL_TEXT}>{aside}</text>
-      )}
-      <line x1={x} y1={y + 36} x2={x + w} y2={y + 36} stroke="#263140" />
-      {children}
+    <g>
+      <rect x={left} y={y} width={w} height={16} rx={2} fill="none" stroke={stroke} strokeWidth={0.8}
+            strokeDasharray={tone === 'past' ? '3 2' : undefined} />
+      <text x={left + w / 2} y={y + 11.5} textAnchor="middle" className="font-label" fontSize={CHIP_FONT}
+            letterSpacing="0.1em" fill={fill}>{text}</text>
     </g>
   )
 }
 
-// A connector that draws itself in once (not at all when the visitor asks for reduced motion)
-function Connector({ d, delay, color = TEAL }: { d: string; delay: number; color?: string }) {
+function LineText({ line, x, y }: { line: Line; x: number; y: number }) {
+  switch (line.kind) {
+    case 'name':
+      return (
+        <text x={x} y={y} className="font-display" fontSize={14} fontWeight={600} fill={C.text}>
+          {line.text}
+          {line.aside && <tspan className="font-body" fontSize={12.5} fontWeight={400} fill={C.soft}>{`  ${line.aside}`}</tspan>}
+        </text>
+      )
+    case 'quote':
+      return <text x={x} y={y} className="font-body" fontSize={13.5} fontStyle="italic" fill={C.text}>{line.text}</text>
+    case 'value':
+      return <text x={x} y={y} className="font-label" fontSize={10.5} fill={C.text}>{line.text}</text>
+    case 'mono':
+      return <text x={x} y={y} className="font-label" fontSize={9.5} letterSpacing="0.04em" fill={C.soft}>{line.text}</text>
+  }
+}
+
+// A current record: eyebrow and state chip, then two lines. The focal one carries the accent.
+const CARD_H = 80
+function CurrentCard({ x, y, w, slot, focal }: { x: number; y: number; w: number; slot: Current; focal: boolean }) {
   return (
-    <path d={d} pathLength={1} fill="none" stroke={color} strokeWidth={1}
-          className="motion-safe:animate-draw motion-safe:[stroke-dasharray:1] motion-safe:[stroke-dashoffset:1]"
-          style={{ animationDelay: `${delay}ms` }} />
+    <g>
+      <rect x={x} y={y} width={w} height={CARD_H} rx={2} fill={C.card} />
+      <rect x={x} y={y} width={w} height={CARD_H} rx={2} fill={focal ? C.accentTint : C.card}
+            stroke={focal ? C.accent : C.line} strokeWidth={focal ? 1.2 : 1} />
+      <text x={x + 16} y={y + 22} className="font-label" fontSize={8.5} letterSpacing="0.14em"
+            fill={focal ? C.accentText : C.muted}>{slot.eyebrow}</text>
+      <Chip x={x + w - 12} y={y + 10} text={slot.chip} tone={focal ? 'focal' : 'current'} align="end" />
+      <LineText line={slot.lines[0]} x={x + 16} y={y + 48} />
+      <LineText line={slot.lines[1]} x={x + 16} y={y + 66} />
+    </g>
   )
 }
 
-function Label({ x, y, children, anchor = 'start' }: { x: number; y: number; children: string; anchor?: 'start' | 'middle' }) {
+// A connector label: mono, on an opaque mask, 8px beside its vertical segment
+function HandoffLabel({ x, y, text }: { x: number; y: number; text: string }) {
+  const w = Math.ceil((text.length * 8.5 * 0.72 + 8) / 4) * 4
   return (
-    <text x={x} y={y} textAnchor={anchor} className="font-label" fontSize={9} letterSpacing="0.08em" fill={TEAL_TEXT}>
-      {children}
-    </text>
+    <g>
+      <rect x={x} y={y} width={w} height={12} fill={C.paper} />
+      <text x={x + 4} y={y + 9} className="font-label" fontSize={8.5} letterSpacing="0.1em" fill={C.muted}>{text}</text>
+    </g>
   )
 }
 
-const Dot = ({ x, y }: { x: number; y: number }) => <circle cx={x} cy={y} r={2.5} fill={TEAL} />
+function Markers({ id }: { id: string }) {
+  return (
+    <defs>
+      <marker id={`${id}-arrow-accent`} markerWidth={8} markerHeight={6} refX={7} refY={3} orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill={C.accent} />
+      </marker>
+      <marker id={`${id}-arrow`} markerWidth={6} markerHeight={5} refX={5} refY={2.5} orient="auto">
+        <polygon points="0 0, 6 2.5, 0 5" fill={C.dash} />
+      </marker>
+    </defs>
+  )
+}
+
+// Slot headers double as the legend: a solid swatch for the current record, a dashed one for history
+function SlotHeader({ x, y, text, past }: { x: number; y: number; text: string; past?: boolean }) {
+  return (
+    <g>
+      <rect x={x + 0.5} y={y - 8.5} width={9} height={9} rx={1} fill={past ? 'none' : 'rgba(232,234,236,0.6)'}
+            stroke={past ? C.past : 'none'} strokeDasharray={past ? '2 1.5' : undefined} />
+      <text x={x + 16} y={y} className="font-label" fontSize={8.5} letterSpacing="0.14em" fill={past ? C.muted : C.soft}>{text}</text>
+    </g>
+  )
+}
+
+// ── Stage × slot matrix (sm and up) ─────────────────────────────────────────
+const D = { w: 608, h: 600, curX: 104, curW: 320, pastX: 448, pastW: 160, top: 32, pitch: 120 }
+const D_CHAIN_X = D.curX + 24
+const D_PAST_CHAIN_X = D.pastX + 20
+const rowY = (i: number) => D.top + i * D.pitch
+
+function PastCard({ x, y, w, slot }: { x: number; y: number; w: number; slot: Past }) {
+  return (
+    <g>
+      <rect x={x} y={y} width={w} height={CARD_H} rx={2} fill={C.paper} stroke={C.dash} strokeDasharray="4 3" />
+      <Chip x={x + 12} y={y + 10} text={slot.chip} tone="past" />
+      <text x={x + 12} y={y + 48} className="font-display" fontSize={12.5} fontWeight={600} fill={C.past}>{slot.name}</text>
+      <text x={x + 12} y={y + 66} className="font-label" fontSize={9} letterSpacing="0.04em" fill={C.past}>{slot.value}</text>
+    </g>
+  )
+}
+
+function MatrixLayout() {
+  return (
+    <svg viewBox={`0 0 ${D.w} ${D.h}`} className="mx-auto block h-auto w-full max-w-[760px]" role="img"
+         aria-labelledby="evidence-record-title evidence-record-desc">
+      <title id="evidence-record-title">{TITLE}</title>
+      <desc id="evidence-record-desc">{DESC}</desc>
+      <Markers id="evidence-record" />
+
+      <SlotHeader x={D.curX} y={14} text="CURRENT · IN THE PASSPORT" />
+      <SlotHeader x={D.pastX} y={14} text="SUPERSEDED BY V2" past />
+
+      {/* Connectors first: the current evidence chain, then the superseded one */}
+      {STAGES.slice(0, -1).map((stage, i) => (
+        <g key={stage.name[0]}>
+          <line x1={D_CHAIN_X} y1={rowY(i) + CARD_H} x2={D_CHAIN_X} y2={rowY(i + 1) - 2} stroke={C.accent}
+                strokeWidth={1.2} markerEnd="url(#evidence-record-arrow-accent)" />
+          <HandoffLabel x={D_CHAIN_X + 8} y={rowY(i) + CARD_H + 14} text={stage.handoff!} />
+          {stage.past && STAGES[i + 1].past && (
+            <line x1={D_PAST_CHAIN_X} y1={rowY(i) + CARD_H} x2={D_PAST_CHAIN_X} y2={rowY(i + 1) - 2} stroke={C.dash}
+                  strokeDasharray="4 3" markerEnd="url(#evidence-record-arrow)" />
+          )}
+        </g>
+      ))}
+
+      {STAGES.map((stage, i) => (
+        <g key={stage.name[0]}>
+          <text x={2} y={rowY(i) + 22} className="font-label" fontSize={10} letterSpacing="0.1em"
+                fill={i === FOCAL ? C.accentText : C.muted}>{String(i + 1).padStart(2, '0')}</text>
+          {stage.name.map((part, k) => (
+            <text key={part} x={2} y={rowY(i) + 46 + k * 17} className="font-display" fontSize={13} fontWeight={600}
+                  fill={C.text}>{part}</text>
+          ))}
+          <CurrentCard x={D.curX} y={rowY(i)} w={D.curW} slot={stage.current} focal={i === FOCAL} />
+          {stage.past
+            ? <PastCard x={D.pastX} y={rowY(i)} w={D.pastW} slot={stage.past} />
+            : <text x={D.pastX + 12} y={rowY(i) + 46} className="font-label" fontSize={9} letterSpacing="0.1em"
+                    fill={C.past}>— NO EARLIER VERSION</text>}
+        </g>
+      ))}
+    </svg>
+  )
+}
+
+// ── Single column (phones) ──────────────────────────────────────────────────
+// Each stage: its name, the current record, then what it superseded, indented. The chain runs down the left
+// edge, beside the superseded records, so it never passes behind one.
+const M = { w: 320, top: 32, chainX: 12, indent: 24, pastH: 48, gap: 8, labelGap: 28 }
+
+function stageLayout() {
+  let y = M.top
+  return STAGES.map(stage => {
+    const top = y
+    const card = top + 20
+    const pastTop = card + CARD_H + M.gap
+    const bottom = stage.past ? pastTop + M.pastH : pastTop + 16
+    y = bottom + M.labelGap
+    return { stage, top, card, pastTop, bottom }
+  })
+}
+const M_ROWS = stageLayout()
+const M_H = M_ROWS[M_ROWS.length - 1].bottom + 4
+
+function CompactPastCard({ x, y, w, slot }: { x: number; y: number; w: number; slot: Past }) {
+  const chipW = chipWidth(slot.chip)
+  return (
+    <g>
+      <rect x={x} y={y} width={w} height={M.pastH} rx={2} fill={C.paper} stroke={C.dash} strokeDasharray="4 3" />
+      <Chip x={x + 10} y={y + 8} text={slot.chip} tone="past" />
+      <text x={x + 20 + chipW} y={y + 20.5} className="font-display" fontSize={12.5} fontWeight={600} fill={C.past}>{slot.name}</text>
+      <text x={x + 10} y={y + 38} className="font-label" fontSize={9} letterSpacing="0.04em" fill={C.past}>{slot.value}</text>
+    </g>
+  )
+}
+
+function ColumnLayout() {
+  return (
+    <svg viewBox={`0 0 ${M.w} ${M_H}`} className="mx-auto block h-auto w-full max-w-[400px]" role="img"
+         aria-labelledby="evidence-record-mobile-title evidence-record-mobile-desc">
+      <title id="evidence-record-mobile-title">{TITLE}</title>
+      <desc id="evidence-record-mobile-desc">{DESC}</desc>
+      <Markers id="evidence-record-mobile" />
+
+      <SlotHeader x={0} y={14} text="CURRENT" />
+      <SlotHeader x={120} y={14} text="SUPERSEDED BY V2" past />
+
+      {M_ROWS.slice(0, -1).map(({ stage, card, bottom }, i) => (
+        <g key={stage.name[0]}>
+          <line x1={M.chainX} y1={card + CARD_H} x2={M.chainX} y2={M_ROWS[i + 1].card - 2} stroke={C.accent}
+                strokeWidth={1.2} markerEnd="url(#evidence-record-mobile-arrow-accent)" />
+          <HandoffLabel x={M.chainX + 8} y={bottom + 8} text={stage.handoff!} />
+        </g>
+      ))}
+
+      {M_ROWS.map(({ stage, top, card, pastTop }, i) => (
+        <g key={stage.name[0]}>
+          <text x={M.indent} y={top + 11} className="font-label" fontSize={10} letterSpacing="0.1em"
+                fill={i === FOCAL ? C.accentText : C.muted}>{String(i + 1).padStart(2, '0')}</text>
+          <text x={M.indent + 24} y={top + 11} className="font-display" fontSize={13.5} fontWeight={600}
+                fill={C.text}>{stage.name.filter(Boolean).join(' ')}</text>
+          <CurrentCard x={0} y={card} w={M.w} slot={stage.current} focal={i === FOCAL} />
+          {stage.past
+            ? <CompactPastCard x={M.indent} y={pastTop} w={M.w - M.indent} slot={stage.past} />
+            : <text x={M.indent + 10} y={pastTop + 11} className="font-label" fontSize={9} letterSpacing="0.1em"
+                    fill={C.past}>— NO EARLIER VERSION</text>}
+        </g>
+      ))}
+    </svg>
+  )
+}
 
 export function EvidenceGraph() {
   return (
-    <svg viewBox="0 0 600 616" className="h-auto w-full" role="img" aria-labelledby="evidence-graph-title evidence-graph-desc">
-      <title id="evidence-graph-title">How the legal evidence behind one asset is recorded</title>
-      <desc id="evidence-graph-desc">
-        Step 1: the asset LPDEMO is registered on Stellar Testnet. Step 2: version 2 of its prospectus supersedes
-        version 1, and a claim cites page 2 of version 2 with an exact quotation. Step 3: an issuer attestation and an
-        independent legal review are bound to version 2, and together with the evidence they form a manifest. Step 4:
-        the manifest's SHA-256 digest is anchored in a Stellar Testnet transaction. Values from the public demo record.
-      </desc>
-      <defs>
-        <pattern id="evidence-graph-dots" width={24} height={24} patternUnits="userSpaceOnUse">
-          <circle cx={1} cy={1} r={1} fill="#1A2330" />
-        </pattern>
-      </defs>
-      <rect width={600} height={616} fill="url(#evidence-graph-dots)" />
-
-      {/* 01: the asset */}
-      <g className="motion-safe:animate-rise">
-        <rect x={20} y={16} width={560} height={44} rx={2} fill="#0F1620" stroke="#263140" />
-        <text x={36} y={43} className="font-label" fontSize={9.5} letterSpacing="0.14em" fill={TEAL_TEXT}>01</text>
-        <text x={62} y={43} className="font-label" fontSize={10} letterSpacing="0.14em" fill={TEXT}>ASSET · LPDEMO</text>
-        <text x={564} y={43} textAnchor="end" className="font-label" fontSize={9} letterSpacing="0.12em" fill={MUTED}>
-          STELLAR TESTNET · ISSUER GB5M55…RDCC
-        </text>
-      </g>
-      <Connector d="M178 60 V92" delay={500} color={LINE} />
-      <Label x={186} y={80}>its legal documents</Label>
-
-      <g transform="translate(0 64)">
-        {/* 02: document versions */}
-        <Card x={20} y={28} w={316} h={168} step="02" title="DOCUMENT · PROSPECTUS" aside="2 VERSIONS" delay={100}>
-          <text x={36} y={96} className="font-label" fontSize={12} fill={DIM}>v1</text>
-          <text x={68} y={96} className="font-label" fontSize={11} fill={DIM}>sha256 {short(DEMO_SHA256_V1)}</text>
-          <text x={320} y={96} textAnchor="end" className="font-label" fontSize={9} letterSpacing="0.12em" fill={DIM}>SUPERSEDED</text>
-          <text x={68} y={114} className="font-body" fontSize={10.5} fill={DIM}>Its approvals no longer apply</text>
-          <line x1={36} y1={130} x2={320} y2={130} stroke="#1E2835" strokeDasharray="3 4" />
-          <text x={36} y={160} className="font-label" fontSize={12} fill={TEXT}>v2</text>
-          <text x={68} y={160} className="font-label" fontSize={11} fill={TEXT}>sha256 {short(DEMO_SHA256_V2)}</text>
-          <rect x={258} y={147} width={62} height={18} rx={1} fill="none" stroke={TEAL} />
-          <text x={289} y={159.5} textAnchor="middle" className="font-label" fontSize={9} letterSpacing="0.12em" fill={TEAL_TEXT}>CURRENT</text>
-          <text x={68} y={178} className="font-body" fontSize={10.5} fill={MUTED}>Uploaded 2026-10-19 · 4 pages</text>
-        </Card>
-
-        {/* 02: a claim of version 2 */}
-        <Card x={372} y={118} w={208} h={112} step="02" title="CLAIM · INCOME RIGHTS" delay={250}>
-          <text x={388} y={178} className="font-body" fontSize={12} fill={TEXT}>Page 2 · exact quotation</text>
-          <text x={388} y={198} className="font-body" fontSize={11} fontStyle="italic" fill={MUTED}>“Net rental income shall be</text>
-          <text x={388} y={214} className="font-body" fontSize={11} fontStyle="italic" fill={MUTED}>distributed quarterly”</text>
-        </Card>
-
-        {/* 03: approvals bound to version 2 */}
-        <Card x={20} y={236} w={316} h={124} step="03" title="APPROVAL BINDING · V2" delay={400}>
-          <text x={36} y={300} className="font-body" fontSize={12} fill={TEXT}>Issuer attestation</text>
-          <text x={320} y={300} textAnchor="end" className="font-label" fontSize={9} letterSpacing="0.12em" fill={TEAL_TEXT}>CURRENT</text>
-          <text x={36} y={326} className="font-body" fontSize={12} fill={TEXT}>Independent legal review</text>
-          <text x={320} y={326} textAnchor="end" className="font-label" fontSize={9} letterSpacing="0.12em" fill={TEAL_TEXT}>CURRENT</text>
-          <text x={36} y={348} className="font-body" fontSize={10.5} fill={DIM}>Internal attestations bound to this version</text>
-        </Card>
-
-        {/* 03: the evidence manifest */}
-        <Card x={372} y={270} w={208} h={96} step="03" title="EVIDENCE MANIFEST" delay={550}>
-          <text x={388} y={330} className="font-label" fontSize={9} letterSpacing="0.12em" fill={MUTED}>SHA-256</text>
-          <text x={388} y={350} className="font-label" fontSize={12} fill={TEXT}>{short(DEMO_DIGEST_V2)}</text>
-        </Card>
-
-        {/* 04: the Stellar Testnet commitment */}
-        <Card x={20} y={410} w={560} h={122} step="04" title="STELLAR TESTNET · ANCHOR" aside="VERIFIED ON HORIZON" delay={700}>
-          <text x={36} y={470} className="font-label" fontSize={9} letterSpacing="0.12em" fill={MUTED}>LEDGER</text>
-          <text x={36} y={492} className="font-label" fontSize={12} fill={TEXT}>{DEMO_LEDGER_V2}</text>
-          <text x={196} y={470} className="font-label" fontSize={9} letterSpacing="0.12em" fill={MUTED}>TRANSACTION</text>
-          <text x={196} y={492} className="font-label" fontSize={12} fill={TEXT}>{short(DEMO_TX_V2)}</text>
-          <text x={400} y={470} className="font-label" fontSize={9} letterSpacing="0.12em" fill={MUTED}>MEMO HASH</text>
-          <text x={400} y={492} className="font-label" fontSize={12} fill={TEXT}>= manifest digest</text>
-          <text x={36} y={518} className="font-body" fontSize={10.5} fill={DIM}>
-            v1 anchor {short(DEMO_TX_V1, 8, 6)} · does not match the current evidence
-          </text>
-        </Card>
-
-        {/* How they relate */}
-        <Connector d="M336 160 H372" delay={800} />
-        <Label x={354} y={153} anchor="middle">cites</Label>
-        <Dot x={336} y={160} /><Dot x={372} y={160} />
-
-        <Connector d="M178 196 V236" delay={950} color={LINE} />
-        <Label x={186} y={220}>approved version</Label>
-
-        <Connector d="M336 318 H372" delay={1100} />
-        <Label x={354} y={311} anchor="middle">binds</Label>
-        <Dot x={336} y={318} /><Dot x={372} y={318} />
-
-        <Connector d="M476 230 V270" delay={1250} />
-        <Label x={484} y={254}>verified quotation</Label>
-
-        <Connector d="M476 366 V410" delay={1400} />
-        <Label x={484} y={392}>sha256 → memo</Label>
-        <Dot x={476} y={366} /><Dot x={476} y={410} />
-      </g>
-    </svg>
+    <>
+      <div className="hidden sm:block"><MatrixLayout /></div>
+      <div className="sm:hidden"><ColumnLayout /></div>
+    </>
   )
 }
