@@ -1,179 +1,106 @@
 # RWA Legal Passport
 
-Institutional legal transparency API for tokenized real-world assets (RWA).
+**The legal evidence layer for tokenized real-world assets.** RWA Legal Passport gives every tokenized asset one reviewable legal record. The record holds its documents and every version of them, the legal claims drawn from those documents with the exact page they quote, and the human approvals bound to the version they reviewed. It also tracks what has changed since. An integrity commitment of that record is anchored on **Stellar Testnet**.
+
+| | |
+|---|---|
+| Website | https://legalpassport.vercel.app/ |
+| Interactive demo (read-only, synthetic data, no sign-in) | https://legalpassport.vercel.app/demo |
+| Demo record anchored on Stellar Testnet (current, version 2) | [Transaction `843a5a6d…3c1240da`](https://stellar.expert/explorer/testnet/tx/843a5a6d9101b3e93a591c88008cf81eca9f25d0f2bd803d5741ef6c3c1240da) · ledger 5285093 |
+| Earlier anchor of the same asset (version 1, superseded) | [Transaction `1687c0dd…628123d2`](https://stellar.expert/explorer/testnet/tx/1687c0ddc4a85b07b3ec13e9064aa57a4556e8993b9ff78080b5ac9d628123d2) · ledger 5241718 |
+| Architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+
+> All data in the demo and in this repository is synthetic and fictional. An approval in this product is an internal attestation, not a legal opinion. A Stellar anchor proves that an exact evidence digest was recorded at a ledger time and that the record is unchanged since. It does not prove legal validity, ownership or compliance.
 
 ---
 
-## Requirements
+## The problem
 
-- Python 3.11 or later
-- Windows 10/11
+A token is issued once, but the legal documents behind it keep changing: prospectuses are amended, opinions are replaced, terms are revised. Today the legal side of a tokenized asset lives in data rooms and PDFs. Nobody can tell which document version a summary came from, who approved it, or whether that approval still applies after an amendment.
 
----
+## What the product does
 
-## Installation (Windows)
+1. **Asset registry.** An asset is registered by its Stellar asset code and issuer key, under its issuer (tenant). The issuer key's checksum is validated with the official `stellar-sdk`.
+2. **Versioned legal documents.** PDFs are uploaded as versions of a document. Each version keeps its SHA-256 hash and its per-page text, and a new version supersedes the previous one without deleting it.
+3. **Legal claims with page-level evidence.** Each claim cites a page and an exact quotation. The server checks the quotation against the stored text of that page of that version. A claim whose quotation cannot be found cannot be approved.
+4. **Human approvals bound to evidence.** An issuer reviewer attests and an independent legal reviewer verifies. Each approval stores a binding: document version, file hash, claims, quotation-check results and asset information, digested with SHA-256. Approvals are never edited or deleted. Whether an approval still applies is decided on every read, so a new document version, a changed claim or changed asset information makes it stop applying until the record is reviewed again.
+5. **Legal Passport API.** Institutions read the currently approved claims, the approvals behind them, the full version history and the Stellar evidence through a scoped, read-only API key (`GET /passport/{network}/{asset_code}/{issuer_key}`, plus `/history` and `/stellar-anchor`).
+6. **Stellar Testnet anchoring and verification.** The passport's evidence manifest (canonical JSON) is hashed with SHA-256. That digest is committed in one Testnet transaction, as the `MEMO_HASH` and a `manage_data` entry. Verification re-reads the transaction from Horizon and checks the network, the source account, the memo and the operation. It then checks that the stored manifest hashes to the anchored digest and that the current evidence still has exactly that digest.
 
-### 1. Clone or open the project
+The [interactive demo](https://legalpassport.vercel.app/demo) walks through all of this on one asset (LPDEMO). Version 1 of its prospectus was approved and anchored. Version 2 then superseded it, which invalidated the version 1 approvals. Version 2 was reviewed, approved and anchored again. The two transactions above are the real Testnet commitments of that record.
 
-```powershell
-cd C:\Users\<your-username>\rwa-legal-passport
-```
+## Architecture in brief
 
-### 2. Create a virtual environment
+- **Backend:** Python, FastAPI and SQLAlchemy (async) on SQLite, with PDF files in local storage and text extraction with `pypdf`. Stellar Testnet is reached through Horizon with the official `stellar-sdk`.
+- **Frontend:** React, TypeScript, Vite and Tailwind. One codebase builds two targets:
+  - the full review application, which talks to the API;
+  - the public website with the read-only demo (`npm run build:public`), which carries no backend calls and no credentials.
+- **Access control:** Bearer tokens for reviewers and `X-API-Key` keys for institutions. Both are stored only as SHA-256 digests, with roles and per-issuer tenant isolation. The passport API and AI extraction are rate-limited, and public deployment profiles add per-client and failed-authentication limits.
+
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Run it locally
+
+Requirements: Python 3.11+ and Node.js 20+. The commands below are for Windows PowerShell; on macOS or Linux use `source .venv/bin/activate` and `cp`.
 
 ```powershell
 python -m venv .venv
-```
-
-### 3. Activate the virtual environment
-
-```powershell
 .venv\Scripts\activate
-```
-
-> Once it is active, you will see `(.venv)` in the terminal.
-
-### 4. Install the dependencies
-
-```powershell
 pip install -r requirements.txt
-```
-
-### 5. Copy the environment variables
-
-```powershell
 copy .env.example .env
-```
-
-### 6. Set up access control (users, roles, issuer scopes)
-
-Every endpoint except `/health` and `/ready` requires authentication. Users, their roles, issuer (tenant) scopes and institutional API keys are defined in the `access_control.json` file; the file contains **only SHA-256 digests** and is not added to Git.
-
-```powershell
 copy access_control.example.json access_control.json
-python -m app.access_tool new-token      # for each user / key: hand over the token, write the digest into the file
-python -m app.access_tool check          # validate the file
-```
+python -m app.access_tool new-token     # once per user or key: hand out the token, put its digest in access_control.json
+python -m app.access_tool check
+uvicorn app.main:app --reload           # API on http://127.0.0.1:8000 (/docs for the OpenAPI UI)
 
-Tokens are entered in the **Credentials** panel in the UI sidebar (kept only for that browser tab). For roles, the permission matrix, the route inventory, CORS and migration from the old `.env` tokens, see **[ACCESS_CONTROL.md](ACCESS_CONTROL.md)**.
-
-Approvals are bound to the exact document version, evidence and asset information, and outdated approvals are never presented as current. See **[APPROVAL_INTEGRITY.md](APPROVAL_INTEGRITY.md)**. Quotations are checked against the stored text of their cited page, reviewer corrections follow explicit evidence rules, and the source text of any document version can be read. See **[EVIDENCE_VERIFICATION.md](EVIDENCE_VERIFICATION.md)** for what these checks establish, and what they do not.
-
-A database created before Stage 9B-3 must be migrated first (**[MIGRATION_9B3_PLAN.md](MIGRATION_9B3_PLAN.md)**), and then to Stage 9B-4 (**[MIGRATION_9B4_CORRECTION_EVIDENCE.md](MIGRATION_9B4_CORRECTION_EVIDENCE.md)**, which also gives the order for older databases). Until then the server refuses to start, without modifying any data.
-
-> Stage 9B-1 added the `issuer_id` column to the `assets` table. With an old-schema database the server refuses to start without modifying any data; you can back up an empty development database, delete it and let it be recreated.
-
----
-
-## Run the server
-
-```powershell
-uvicorn app.main:app --reload
-```
-
-The server starts at `http://127.0.0.1:8000`.
-
-| URL | Description |
-|-----|----------|
-| `http://127.0.0.1:8000/health` | Health check (liveness: the process answers) |
-| `http://127.0.0.1:8000/ready` | Readiness check: database, access registry and document storage (200 or 503, see [DEPLOYMENT.md §7](DEPLOYMENT.md)) |
-| `http://127.0.0.1:8000/docs` | Swagger UI (interactive API documentation) |
-| `http://127.0.0.1:8000/redoc` | ReDoc documentation |
-
----
-
-## Run the frontend
-
-```powershell
 cd frontend
 npm install
-npm run dev        # http://localhost:5173, talks to the API at http://localhost:8000
+npm run dev                             # review application on http://localhost:5173
 ```
 
-The interface is English-only. `npm run build` writes the production build to `frontend/dist`.
+Tokens are entered in the application's **Credentials** panel. Roles and scopes are described in [ACCESS_CONTROL.md](ACCESS_CONTROL.md). Anchoring on Stellar Testnet needs a funded Testnet account (`python scripts/stellar_testnet_setup.py`), kept in `secrets/`, which is never committed; see [STELLAR_ANCHORING.md](STELLAR_ANCHORING.md).
 
----
-
-## Run the tests
+**Tests:**
 
 ```powershell
-pytest -v                      # backend: uses in-memory or scratch databases, never rwa_legal_passport.db
-cd frontend; npm test          # frontend (Vitest)
-cd frontend; npx tsc --noEmit  # type check
-python scripts/e2e_run.py --offline-host   # real-browser end-to-end tests (Playwright + Chromium), on a disconnected computer
+pytest                          # backend
+cd frontend; npm test           # frontend (Vitest)
+cd frontend; npx tsc --noEmit   # type check
 ```
 
-The end-to-end tests start their own backend and frontend on free ports, with a temporary database and fictional credentials. They run only once the computer's external networking is switched off: the runner prints the instructions and waits for it. See **[E2E_TESTING.md](E2E_TESTING.md)**.
+Real-browser end-to-end tests (Playwright) are described in [E2E_TESTING.md](E2E_TESTING.md). No test makes a paid AI call or a Stellar transaction.
 
-For a local grant demo, `python scripts/grant_demo.py` serves a read-only showcase of the synthetic dataset on this computer only, and deletes it when stopped. The procedure, the read-only showcase and evaluator sandbox designs, and the deployment security audit are in **[GRANT_DEMO.md](GRANT_DEMO.md)**. The deployable showcase bundle (`scripts/build_showcase.py`), the proposed reverse proxy and service configuration (`deploy/`), the local deployment rehearsal and the dependency audit are in **[DEPLOYMENT.md](DEPLOYMENT.md)**. Nothing is deployed.
+## Known limitations
 
-No test makes a paid AI call or contacts the Stellar network: both are replaced by mocks or blocked. The former opt-in live check, `scripts/e2e_run.py --testnet-readonly`, is now refused, because the browser tests run only on a disconnected computer.
+- **Only the website and the read-only demo are hosted.** The demo shows a bundled snapshot: the LPDEMO record as the API returned it, plus two illustrative synthetic records (LPFUND, LPNOTE) with no Stellar transaction. Its anchor check is the one recorded on 19 Oct 2026 22:31 UTC, not a live check. The FastAPI backend and the full review application currently run locally only.
+- **Stellar Testnet only.** Mainnet anchoring is refused by design. Testnet is reset periodically, after which Testnet anchors can no longer be looked up.
+- **AI extraction is optional and disabled by default.** It can draft claims with Anthropic's API. The live model integration has not been verified, and every AI draft still requires human review and verified quotations.
+- **No OCR.** Pages without a text layer (scanned images) cannot be quoted.
+- **Single-node storage.** SQLite and local file storage suit one server process; there is no managed backup or multi-instance setup.
+- **Tokens are issued manually** in `access_control.json`. They do not expire, and there is no self-service sign-up.
 
----
+## Documentation
 
-## AI extraction
+| Topic | Document |
+|---|---|
+| Architecture overview | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Approval binding and currency | [APPROVAL_INTEGRITY.md](APPROVAL_INTEGRITY.md) |
+| Quotation checks and evidence rules | [EVIDENCE_VERIFICATION.md](EVIDENCE_VERIFICATION.md) |
+| Stellar Testnet anchoring and verification | [STELLAR_ANCHORING.md](STELLAR_ANCHORING.md) |
+| Users, roles, tenants and API keys | [ACCESS_CONTROL.md](ACCESS_CONTROL.md) |
+| Optional AI extraction | [AI_EXTRACTION.md](AI_EXTRACTION.md) |
+| The demo dataset | [DEMO.md](DEMO.md) |
+| Deployment profiles and checks | [DEPLOYMENT.md](DEPLOYMENT.md) |
+| Browser end-to-end tests | [E2E_TESTING.md](E2E_TESTING.md) |
+| Demo video script | [docs/DEMO_VIDEO_SCRIPT.md](docs/DEMO_VIDEO_SCRIPT.md) |
 
-AI extraction is **disabled by default** (`AI_PROVIDER=disabled`): no document text is sent to any AI service. With `AI_PROVIDER=anthropic`, the text of a document version is sent to Anthropic only under three conditions:
-- a valid `ANTHROPIC_API_KEY` is set on the server;
-- the document's issuer has `"external_ai_processing": true` in `access_control.json`;
-- the user confirms that exact request.
+Other Markdown files in the repository root are dated development records, kept as written.
 
-Inputs and outputs are bounded, and the result is always an unverified draft. See **[AI_EXTRACTION.md](AI_EXTRACTION.md)**. The real model has not yet been tested live.
+## Repository safety
 
-The first live test is prepared as a harness that does nothing without explicit flags. Rehearse it offline:
+The repository holds no credentials, databases or private documents:
+- `.env`, `access_control.json`, `*.db`, `secrets/`, `backups/` and `scratch/` are excluded by `.gitignore`;
+- the PDFs in `tests/fixtures/` are fictional test documents;
+- the keys that appear in tests are fictional placeholders that are never valid.
 
-```powershell
-python scripts/ai_live_check.py --dry-run                # every gate up to the confirmation; no AI request
-python scripts/ai_live_check.py --fake-provider all      # offline fake provider, all scenarios
-```
-
-The one authorized live run and its evaluation: **[AI_LIVE_TEST.md](AI_LIVE_TEST.md)**.
-
----
-
-## Stellar Testnet evidence anchoring
-
-A passport's evidence manifest can be committed to Stellar Testnet (memo hash + `manage_data`) and verified against live network data. See **[STELLAR_ANCHORING.md](STELLAR_ANCHORING.md)**.
-
-```powershell
-python scripts/stellar_testnet_setup.py   # once: creates and funds the Testnet anchoring account (secrets/, gitignored)
-python scripts/stellar_testnet_e2e.py     # end-to-end demo on a disposable database, real Testnet transaction
-```
-
-An anchor is not a legal approval; Testnet is reset periodically, and Mainnet anchoring is not supported. The browser demo on synthetic data (verification-only, no transaction, no paid AI) is described in **[DEMO.md](DEMO.md)**.
-
----
-
-## Contributing and language policy
-
-All code, comments, documentation, API messages, logs, CLI text, tests and UI text are written in English. Multilingual test fixtures, original legal evidence, user data and historical reports are the only exceptions. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full standard. `tests/test_language_policy.py` enforces it as part of `pytest`.
-
----
-
-## Project structure
-
-```
-rwa-legal-passport/
-├── app/
-│   ├── main.py                 # FastAPI application, startup schema check
-│   ├── config.py               # Settings (pydantic-settings, .env)
-│   ├── access_registry.py      # Users, issuers, institutional keys (access_control.json)
-│   ├── auth.py, api_keys.py, authorization.py, permissions.py   # Authentication, roles, tenant scope
-│   ├── evidence.py             # Deterministic quotation check (no I/O)
-│   ├── evidence_records.py     # Quotation check against a version's stored page text
-│   ├── correction_rules.py     # Reviewer correction evidence rules
-│   ├── approval_integrity.py   # Approval binding and currency
-│   ├── source_integrity.py     # Stored PDF vs page records, checked at approval
-│   ├── db/                     # Engine, session, schema check
-│   ├── models/, schemas/       # Database models, API schemas
-│   ├── routers/                # assets, documents, extractions, review, passport, blockchain, auth, health
-│   └── services/               # AI (Anthropic), PDF, storage, Stellar Horizon
-├── frontend/                   # React + Vite + TypeScript review interface (English-only)
-├── scripts/                    # Database migrations (9B-3, 9B-4)
-├── tests/                      # Backend tests (pytest)
-├── .env.example                # Example environment variables (.env itself is never committed)
-├── access_control.example.json # Access configuration template (digests only)
-├── pytest.ini, requirements.txt
-└── *.md                        # Documentation. PRODUCT_READINESS.md (9A audit plus stage status log)
-                                #   and ENGLISH_MIGRATION_*.md are records: earlier sections are kept as written
-```
+Code, documentation and UI are English-only ([CONTRIBUTING.md](CONTRIBUTING.md)).
