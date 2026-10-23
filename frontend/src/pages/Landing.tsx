@@ -66,11 +66,9 @@ function SectionHeader({ id, eyebrow, title, lead, tone }: {
 }
 
 // The way into the product: the application itself, or on the public website (site.ts), which carries
-// no application, the product section of this page
+// no application, its read-only interactive demo
 function EntryLink({ className, onClick }: { className: string; onClick?: () => void }) {
-  return PUBLIC_SITE
-    ? <a href="#product" onClick={onClick} className={className}>View Product <Arrow /></a>
-    : <Link to="/dashboard" onClick={onClick} className={className}>Launch App <Arrow /></Link>
+  return <Link to={PUBLIC_SITE ? '/demo' : '/dashboard'} onClick={onClick} className={className}>Launch App <Arrow /></Link>
 }
 
 function SiteHeader() {
@@ -458,7 +456,11 @@ function ProductPreview() {
               documents, the issuer and the reviewers are synthetic. An approval is an internal attestation, not a
               legal opinion.
             </span>
-            {!PUBLIC_SITE && (
+            {PUBLIC_SITE ? (
+              <Link to="/demo/passport" className={`group inline-flex shrink-0 items-center gap-2 text-mist hover:text-white ${FOCUS}`}>
+                Explore it in the interactive demo <Arrow />
+              </Link>
+            ) : (
               <Link to="/passport" className={`group inline-flex shrink-0 items-center gap-2 text-mist hover:text-white ${FOCUS}`}>
                 Open the Legal Passport lookup <Arrow />
               </Link>
@@ -611,9 +613,9 @@ function FinalCta() {
           </h2>
           <p className="mt-8 max-w-2xl font-body text-lg leading-relaxed text-paper-muted text-pretty">
             {PUBLIC_SITE
-              ? 'The application is not publicly hosted. Follow the demo record LPDEMO in the product section — a first ' +
-                'prospectus, an approved second version and its commitment on Stellar Testnet — or read how each step ' +
-                'of the evidence record works.'
+              ? 'Explore the interactive demo, with no sign-in: a read-only workspace of synthetic records. Follow the ' +
+                'demo record LPDEMO — a first prospectus, an approved second version and its commitment on Stellar ' +
+                'Testnet — or read how each step of the evidence record works.'
               : 'Open the application to register assets, attach documents and review claims, or look up a Legal ' +
                 'Passport with an institutional key. In the public showcase, the demo record LPDEMO shows the full ' +
                 'cycle: a first prospectus, an approved second version and its commitment on Stellar Testnet.'}
@@ -622,10 +624,13 @@ function FinalCta() {
         <div className="flex flex-col gap-3 sm:flex-row lg:col-span-4 lg:flex-col">
           {PUBLIC_SITE ? (
             <>
-              <a href="#product" className={`${BUTTON} justify-between bg-graphite text-mist hover:bg-black ${FOCUS_LIGHT}`}>
+              <Link to="/demo" className={`${BUTTON} justify-between bg-graphite text-mist hover:bg-black ${FOCUS_LIGHT}`}>
+                Launch Interactive Demo <Arrow />
+              </Link>
+              <a href="#product" className={`${BUTTON} justify-between border border-graphite/25 text-graphite hover:border-graphite ${FOCUS_LIGHT}`}>
                 See the product <Arrow />
               </a>
-              <a href="#how-it-works" className={`${BUTTON} justify-between border border-graphite/25 text-graphite hover:border-graphite ${FOCUS_LIGHT}`}>
+              <a href="#how-it-works" className={`group inline-flex items-center gap-2 px-1 py-2 font-body text-[14px] text-graphite/80 hover:text-graphite ${FOCUS_LIGHT}`}>
                 How it works <Arrow />
               </a>
             </>
@@ -659,8 +664,12 @@ const FOOTER_LINKS: { title: string; links: { label: string; href?: string; to?:
     { label: 'Product', href: '#product' },
     { label: 'Stellar infrastructure', href: '#stellar' },
   ] },
-  // The public website carries no application (site.ts)
-  ...(PUBLIC_SITE ? [] : [{ title: 'Application', links: [
+  // The public website carries no application, only its read-only demo (site.ts)
+  ...(PUBLIC_SITE ? [{ title: 'Interactive demo', links: [
+    { label: 'Launch App', to: '/demo' },
+    { label: 'Asset Registry', to: '/demo/assets' },
+    { label: 'Legal Passport', to: '/demo/passport' },
+  ] }] : [{ title: 'Application', links: [
     { label: 'Launch App', to: '/dashboard' },
     { label: 'Legal Passport', to: '/passport' },
     { label: 'Asset Registry', to: '/assets' },

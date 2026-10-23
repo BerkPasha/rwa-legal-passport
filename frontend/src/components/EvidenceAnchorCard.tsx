@@ -35,7 +35,10 @@ function prettyManifest(canonical: string): string {
 
 // Verification of a passport's Stellar Testnet evidence commitment. A successful transaction is a
 // commitment of time and content only: it never turns into legal or independent verification.
-export function EvidenceAnchorCard({ verification, actions }: { verification: AnchorVerification; actions?: ReactNode }) {
+// checksLabel: the heading of the network checks; a recorded check (the public demo) says so instead
+export function EvidenceAnchorCard({ verification, actions, checksLabel = 'Live network checks' }: {
+  verification: AnchorVerification; actions?: ReactNode; checksLabel?: string
+}) {
   const result = ANCHOR_RESULTS[verification.result] ?? {
     label: verification.result, tone: 'slate' as const, explanation: '',
   }
@@ -158,7 +161,7 @@ export function EvidenceAnchorCard({ verification, actions }: { verification: An
 
           {onchain.checked && (
             <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">Live network checks</p>
+              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">{checksLabel}</p>
               <ul data-testid="anchor-onchain-checks" className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
                 <Check label="Horizon is on Stellar Testnet" value={onchain.network_passphrase_matches} />
                 <Check label="Transaction found" value={onchain.transaction_found} />
